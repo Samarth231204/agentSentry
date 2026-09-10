@@ -11,3 +11,4 @@ report.md
 findings.json
 manifest.yaml
 .env
+.claude/
