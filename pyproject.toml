@@ -1,0 +1,29 @@
+[project]
+name = "agentguard"
+version = "0.1.0"
+description = "Automated red-teaming for AI agent applications"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "pydantic>=2.6",
+    "httpx>=0.27",
+    "click>=8.1",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+attackers = ["google-adk", "litellm"]
+manifest = ["chromadb"]
+reporters = ["crewai"]
+dev = ["pytest"]
+
+[project.scripts]
+agentguard = "agentguard.cli:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["agentguard*"]
