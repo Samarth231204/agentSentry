@@ -10,3 +10,4 @@ build/
 report.md
 findings.json
 manifest.yaml
+.env
