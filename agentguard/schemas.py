@@ -95,6 +95,13 @@ class Report(BaseModel):
     findings: list[Finding]
     severity: dict[str, str]
     remediation: dict[str, str]
+    # Filled deterministically by reporters._enrich_report() after the crew
+    # (or the fallback) runs, so every report carries them regardless of
+    # whether the LLM produced them. Defaults keep CrewAI output_pydantic
+    # validation unchanged.
+    owasp: dict[str, str] = Field(default_factory=dict)            # finding id -> OWASP LLM Top 10 entry
+    code_references: dict[str, list[str]] = Field(default_factory=dict)  # finding id -> ["file:line: code"]
+    generated_by: str = "llm"  # "llm" or "deterministic_fallback"
 
 
 class TargetProfile(BaseModel):

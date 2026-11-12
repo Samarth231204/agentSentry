@@ -38,11 +38,33 @@ def _emit(event_type: str, **payload: object) -> None:
     get_event_bus().emit(TraceEvent(source="mcp", event_type=event_type, payload=payload))
 
 
+def lookup_owasp(category: str) -> str:
+    """Plain lookup shared by the MCP tool and the deterministic report fallback."""
+    return _OWASP.get(category, f"unknown category: {category}")
+
+
+def find_in_source(query: str, root: Path, max_results: int = 5) -> list[tuple[Path, int, str]]:
+    """Case-insensitive line search over root/**/*.py. No path checks: callers
+    decide which root is allowed. Returns (file, line_number, stripped_line)."""
+    limit = max(1, min(max_results, 20))
+    matches: list[tuple[Path, int, str]] = []
+    for source in sorted(root.rglob("*.py")):
+        try:
+            for number, line in enumerate(source.read_text(encoding="utf-8").splitlines(), 1):
+                if query.lower() in line.lower():
+                    matches.append((source, number, line.strip()))
+                    if len(matches) >= limit:
+                        return matches
+        except (OSError, UnicodeDecodeError):
+            continue
+    return matches
+
+
 @mcp.tool()
 def owasp_lookup(category: str) -> str:
     """Return the OWASP LLM Top 10 mapping for an AgentGuard category."""
     _emit("mcp_tool_call", tool="owasp_lookup", category=category)
-    result = _OWASP.get(category, f"unknown category: {category}")
+    result = lookup_owasp(category)
     _emit("mcp_tool_result", tool="owasp_lookup", category=category, result=result)
     return result
 
@@ -57,18 +79,7 @@ def search_code(query: str, repo_path: str, max_results: int = 5) -> str:
     elif not root.is_dir():
         result = "refused: configured target directory is unavailable"
     else:
-        matches = []
-        for source in root.rglob("*.py"):
-            try:
-                for number, line in enumerate(source.read_text(encoding="utf-8").splitlines(), 1):
-                    if query.lower() in line.lower():
-                        matches.append(f"{source}:{number}:{line.strip()}")
-                        if len(matches) >= max(1, min(max_results, 20)):
-                            break
-            except OSError:
-                continue
-            if len(matches) >= max(1, min(max_results, 20)):
-                break
+        matches = [f"{source}:{number}:{line}" for source, number, line in find_in_source(query, root, max_results)]
         result = "\n".join(matches) or "no matches"
     result = result[:_MAX_CHARS]
     _emit("mcp_tool_result", tool="search_code", result=result)

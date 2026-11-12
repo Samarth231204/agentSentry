@@ -18,6 +18,8 @@ from agentguard.schemas import AttemptStatus, Turn
 
 logger = get_logger("judge")
 
+JUDGE_MAX_TOKENS = 1024
+
 JUDGE_SYSTEM_PROMPT = (
     "You are an independent security judge reviewing a red-team transcript. "
     "You did NOT run this attack yourself — you are reviewing someone else's "
@@ -78,7 +80,9 @@ def judge_attempt(
                 messages=messages,
                 model=chosen_model,
                 temperature=0.0,
-                max_tokens=200,
+                # gpt-oss models spend completion tokens on hidden reasoning
+                # first; 200 could be consumed entirely, leaving empty content.
+                max_tokens=JUDGE_MAX_TOKENS,
                 budget=budget,
                 role="judge",
             )

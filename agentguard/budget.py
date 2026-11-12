@@ -12,10 +12,15 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from agentguard.events import get_event_bus
 from agentguard.logging import get_logger
-from agentguard.schemas import BudgetUsage
+from agentguard.schemas import BudgetUsage, TraceEvent
 
 logger = get_logger("budget")
+
+
+def _emit(event_type: str, **payload: object) -> None:
+    get_event_bus().emit(TraceEvent(source="budget", event_type=event_type, payload=payload))
 
 
 class BudgetExceededError(Exception):
@@ -36,6 +41,19 @@ class BudgetTracker:
         self._lock = threading.Lock()
         self._total = BudgetUsage()
         self._by_role: dict[str, BudgetUsage] = {}
+        self._exhausted = False
+
+    @property
+    def exhausted(self) -> bool:
+        """True once any record() call has hit a ceiling. Stays True for the
+        rest of the run so every caller can stop making LLM calls."""
+        return self._exhausted
+
+    def _exceed(self, message: str, role: str) -> BudgetExceededError:
+        self._exhausted = True
+        logger.warning("Budget exceeded: %s", message)
+        _emit("budget_exceeded", role=role, reason=message, total=self._total.model_dump())
+        return BudgetExceededError(message)
 
     def record(self, role: str, prompt_tokens: int = 0, completion_tokens: int = 0) -> None:
         """Call this after every LLM completion. Raises BudgetExceededError
@@ -50,18 +68,16 @@ class BudgetTracker:
             new_role_calls = role_usage.calls + 1
 
             if self.config.max_calls_total is not None and new_total_calls > self.config.max_calls_total:
-                raise BudgetExceededError(
-                    f"max_calls_total={self.config.max_calls_total} exceeded (role={role})"
+                raise self._exceed(
+                    f"max_calls_total={self.config.max_calls_total} exceeded (role={role})", role
                 )
             if self.config.max_tokens_total is not None and new_total_tokens > self.config.max_tokens_total:
-                raise BudgetExceededError(
-                    f"max_tokens_total={self.config.max_tokens_total} exceeded (role={role})"
+                raise self._exceed(
+                    f"max_tokens_total={self.config.max_tokens_total} exceeded (role={role})", role
                 )
             role_ceiling = self.config.max_calls_per_role.get(role)
             if role_ceiling is not None and new_role_calls > role_ceiling:
-                raise BudgetExceededError(
-                    f"max_calls_per_role[{role}]={role_ceiling} exceeded"
-                )
+                raise self._exceed(f"max_calls_per_role[{role}]={role_ceiling} exceeded", role)
 
             role_usage.calls = new_role_calls
             role_usage.prompt_tokens += prompt_tokens
@@ -75,6 +91,15 @@ class BudgetTracker:
                 role, new_role_calls, role_ceiling,
                 new_total_tokens, self.config.max_tokens_total,
             )
+            usage_event = dict(
+                role=role,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_calls=new_total_calls,
+                total_tokens=new_total_tokens,
+            )
+        # Emit outside the lock: subscribers do file I/O.
+        _emit("llm_usage", **usage_event)
 
     def usage_report(self) -> dict:
         """Returns {"total": BudgetUsage, "by_role": {role: BudgetUsage}} as plain dicts."""

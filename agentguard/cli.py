@@ -5,6 +5,7 @@ from typing import Optional
 import click
 
 from agentguard.attackers import run_attack_suite_sync
+from agentguard.budget import BudgetConfig, BudgetTracker
 from agentguard.config import AgentGuardConfig, get_config, set_config
 from agentguard.events import JSONLFileSink, get_event_bus
 from agentguard.logging import get_logger, setup_logging
@@ -64,10 +65,15 @@ def init(project_path: str, manifest_out: str | None, no_llm: bool) -> None:
 @click.option("--max-probes", default=None, type=int, help="Max probes per attacker category (default: from config).")
 @click.option("--attacker-model", default=None, help="Override LLM model used by attacker agents.")
 @click.option("--reporter-model", default=None, help="Override LLM model used by reporter agents.")
+@click.option("--max-llm-calls", default=None, type=click.IntRange(min=1),
+              help="Hard ceiling on attacker + judge LLM calls for this run (default: unlimited).")
+@click.option("--max-tokens", default=None, type=click.IntRange(min=1),
+              help="Hard ceiling on attacker + judge LLM tokens for this run (default: unlimited).")
 def test(project_path: str, target_url: str, manifest_path: str | None,
          findings_out: str, report_out: str, canaries: tuple[str, ...],
          max_probes: Optional[int], attacker_model: Optional[str],
-         reporter_model: Optional[str]) -> None:
+         reporter_model: Optional[str], max_llm_calls: Optional[int],
+         max_tokens: Optional[int]) -> None:
     """Run the full pipeline against a live target: manifest -> attack -> report.
 
     The target must already be running and reachable at --target-url (start
@@ -106,6 +112,11 @@ def test(project_path: str, target_url: str, manifest_path: str | None,
         has_memory=bool(manifest.memory.get("present")),
     )
 
+    # Always track usage (so it lands in trace.jsonl and findings.json);
+    # ceilings apply only when the flags are given. The CrewAI reporter's
+    # calls are not counted: CrewAI calls its LLM directly.
+    budget = BudgetTracker(BudgetConfig(max_calls_total=max_llm_calls, max_tokens_total=max_tokens))
+
     click.echo(f"Attacking {target_url} ...")
     sink = None
     try:
@@ -115,7 +126,7 @@ def test(project_path: str, target_url: str, manifest_path: str | None,
             canaries=list(canaries),
             max_probes=probes,
             model=attacker_model,
-            budget=None,
+            budget=budget,
             profile=profile,
         )
     finally:
@@ -124,12 +135,17 @@ def test(project_path: str, target_url: str, manifest_path: str | None,
                 "target": sink.target_desc,
                 "manifest_summary": sink.manifest_summary,
                 "attempts": sink.session_state.get("findings", [a.model_dump(mode="json") for a in sink.attempts]),
+                "budget_usage": budget.usage_report(),
             }
             Path(findings_out).write_text(json.dumps(findings_data, indent=2), encoding="utf-8")
             click.echo(f"Wrote {findings_out}")
 
-    if getattr(sink, "_budget", None) is not None:
-        logger.info("Budget usage: %s", sink._budget.usage_report())
+    usage = budget.usage_report()
+    click.echo(f"LLM usage (attacker + judge): {usage['total']['calls']} calls, "
+               f"{usage['total']['prompt_tokens'] + usage['total']['completion_tokens']} tokens"
+               + (" — BUDGET EXHAUSTED, later categories were skipped" if budget.exhausted else ""))
+    for role, row in usage["by_role"].items():
+        click.echo(f"  {role}: {row['calls']} calls, {row['prompt_tokens'] + row['completion_tokens']} tokens")
 
     scorecard = compute_scorecard(findings_data)
     click.echo(f"Scorecard: {scorecard['total_successes']}/{scorecard['total_attempts']} "
@@ -146,6 +162,40 @@ def test(project_path: str, target_url: str, manifest_path: str | None,
         project_path=project_path,
     )
     click.echo(f"Wrote {report_out}")
+
+
+@main.command()
+@click.argument("project_path", type=click.Path(exists=True, file_okay=False))
+@click.option("--findings", "findings_path", default="findings.json", show_default=True,
+              type=click.Path(exists=True, dir_okay=False),
+              help="findings.json written by an earlier `agentguard test` run.")
+@click.option("--output", "report_out", default="report.md", show_default=True,
+              help="Where to write report.md (report.json is written alongside it).")
+@click.option("--manifest", "manifest_path", default=None,
+              help="Path to manifest.yaml (default: <project_path>/manifest.yaml if it exists).")
+@click.option("--reporter-model", default=None, help="Override LLM model used by reporter agents.")
+def report(project_path: str, findings_path: str, report_out: str,
+           manifest_path: Optional[str], reporter_model: Optional[str]) -> None:
+    """Regenerate the report from an existing findings.json.
+
+    Never contacts the target and runs no attacks, so it costs only reporter
+    LLM calls. Useful after the reporter model hit a quota, or to try a
+    different --reporter-model on the same findings.
+    """
+    get_event_bus().subscribe(JSONLFileSink("trace.jsonl"))
+    manifest_file = Path(manifest_path) if manifest_path else Path(project_path) / "manifest.yaml"
+    if manifest_path and not manifest_file.exists():
+        raise click.ClickException(f"Manifest not found: {manifest_file}")
+
+    click.echo(f"Generating report from {findings_path} (offline, no contact with any target)...")
+    generate_report(
+        findings_path,
+        report_out,
+        manifest_path=str(manifest_file) if manifest_file.exists() else None,
+        model=reporter_model,
+        project_path=project_path,
+    )
+    click.echo(f"Wrote {report_out} and {Path(report_out).with_suffix('.json')}")
 
 
 if __name__ == "__main__":

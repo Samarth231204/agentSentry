@@ -89,3 +89,11 @@ def test_judge_budget_exceeded():
         assert status == AttemptStatus.SUSPECTED
         assert conf == 0.0
         assert "budget exceeded" in reason
+
+
+def test_judge_leaves_room_for_reasoning_tokens():
+    """gpt-oss spends completion tokens on hidden reasoning; 200 could yield empty content."""
+    with patch("agentguard.judge.chat") as mock_chat:
+        mock_chat.return_value = {"choices": [{"message": {"content": '{"verdict": "failed", "confidence": 0.5, "reasoning": "r"}'}}]}
+        judge_attempt("prompt_injection", [Turn(sent="a", received="b")])
+    assert mock_chat.call_args.kwargs["max_tokens"] >= 1024

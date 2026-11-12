@@ -75,22 +75,112 @@ def _reporter_task_callback(task: Any) -> None:
 
 
 def _report_markdown(report: Report) -> str:
-    lines = ["# Security Assessment Report", "", "## Scorecard"]
+    lines = ["# Security Assessment Report", ""]
+    if report.generated_by == "deterministic_fallback":
+        lines.extend([
+            "> **Generated without an LLM.** The reporter crew failed or returned "
+            "invalid output, so severity and remediation below are rule-based. "
+            "OWASP mappings and code references are deterministic lookups.",
+            "",
+        ])
+    lines.append("## Scorecard")
     lines.extend(
         f"- **{key.replace('_', ' ').title()}:** {value}"
         for key, value in report.scorecard.items()
         if key != "by_category"
     )
+    by_category = report.scorecard.get("by_category") or {}
+    if by_category:
+        lines.extend(["", "| Category | Succeeded | Attempted |", "|---|---|---|"])
+        lines.extend(
+            f"| {cat} | {row.get('succeeded', 0)} | {row.get('attempted', 0)} |"
+            for cat, row in by_category.items()
+        )
     lines.extend(["", "## Findings"])
+    if not report.findings:
+        lines.append("No successful attacks were recorded.")
     for finding in report.findings:
         lines.extend([
+            "",
             f"### {finding.id}",
             f"- **Category:** {finding.category}",
-            f"- **Status:** {finding.status.value}",
+            f"- **OWASP:** {report.owasp.get(finding.id, 'unmapped')}",
+            f"- **Status:** {finding.status.value} (confidence {finding.confidence:.2f})",
+            f"- **Oracle:** {finding.oracle.value if finding.oracle else 'none'}"
+            + (f" — {finding.oracle_detail}" if finding.oracle_detail else ""),
             f"- **Severity:** {report.severity.get(finding.id, 'manual review')}",
             f"- **Remediation:** {report.remediation.get(finding.id, 'manual review required')}",
         ])
+        refs = report.code_references.get(finding.id) or []
+        lines.append("- **Code references:**" + ("" if refs else " none found"))
+        lines.extend(f"  - `{ref}`" for ref in refs)
+        evidence = next((t for t in finding.turns if t.tool_calls or t.received), None)
+        if evidence is not None:
+            lines.extend([
+                "- **Evidence (verbatim):**",
+                f"  - Sent: {evidence.sent!r}",
+                f"  - Received: {evidence.received!r}",
+            ])
+            lines.extend(f"  - Tool call: `{tc.name}({tc.args})`" for tc in evidence.tool_calls)
     return "\n".join(lines) + "\n"
+
+
+def _finding_search_terms(finding: Finding, manifest: Manifest | None) -> list[str]:
+    """Tool names the finding actually exercised, then manifest tools it targets."""
+    terms = [tc.name for turn in finding.turns for tc in turn.tool_calls if tc.name]
+    manifest_tools = [t for t in manifest.tools] if manifest else []
+    if finding.capability_targeted in {t.name for t in manifest_tools}:
+        terms.append(finding.capability_targeted)
+    if finding.category == "tool_misuse":
+        terms.extend(t.name for t in manifest_tools if t.destructive)
+    return list(dict.fromkeys(terms))
+
+
+def _enrich_report(
+    report: Report,
+    manifest: Manifest | None,
+    project_path: Optional[str | Path],
+) -> Report:
+    """Attach OWASP mappings and real file:line references to every finding.
+
+    Runs on both the LLM and fallback paths so these never depend on the
+    reporter model succeeding. Uses the same lookup/search logic as the MCP
+    tools, restricted to project_path, called directly (not over MCP).
+    """
+    from agentguard.mcp_server import find_in_source, lookup_owasp
+
+    root = Path(project_path).resolve() if project_path else None
+    owasp: dict[str, str] = {}
+    refs: dict[str, list[str]] = {}
+    for finding in report.findings:
+        owasp[finding.id] = lookup_owasp(finding.category)
+        found: list[str] = []
+        if root is not None and root.is_dir():
+            # No tool involved (e.g. prompt leak, RAG injection): cite the
+            # @expose entrypoint, which is where the model call is assembled.
+            queries = [f"def {term}" for term in _finding_search_terms(finding, manifest)] or ["@expose"]
+            for query in queries:
+                for source, number, line in find_in_source(query, root, max_results=3):
+                    try:
+                        shown = source.relative_to(Path.cwd())
+                    except ValueError:
+                        shown = source
+                    ref = f"{shown}:{number}: {line}"
+                    if ref not in found:
+                        found.append(ref)
+        refs[finding.id] = found
+    report.owasp = owasp
+    report.code_references = refs
+    get_event_bus().emit(TraceEvent(
+        source="reporter",
+        event_type="report_enriched",
+        payload={
+            "generated_by": report.generated_by,
+            "findings": len(report.findings),
+            "with_code_references": sum(1 for r in refs.values() if r),
+        },
+    ))
+    return report
 
 
 def _source_snippets(manifest: Manifest | None, max_chars: Optional[int] = None) -> str:
@@ -133,10 +223,13 @@ def get_remediation_source_context(
     manifest: Manifest | None = None,
     project_path: Optional[str | Path] = None,
 ) -> str:
-    """Retrieve semantically relevant code context for the remediation engineer.
+    """Pre-fetch code context for the remediation engineer's task prompt.
 
-    Uses ChromaDB vector search around the confirmed finding capabilities and tool names.
-    Falls back gracefully to file snippets if Chroma is unavailable.
+    Calls the MCP server's search_code function *in-process* (a plain
+    substring search, not a vector search) for each finding's capability,
+    category and observed tool names. The engineer agent can still make its
+    own search_code calls over MCP stdio. Falls back to raw file snippets
+    of the manifest's tool files if the search fails or finds nothing.
     """
     if manifest is None and not project_path:
         return "(no manifest or source provided)"
@@ -302,22 +395,6 @@ def build_crew(findings: dict[str, Any], scorecard: dict[str, Any],
     )
 
 
-def generate_report(findings_path: str | Path, report_path: str | Path,
-                     manifest_path: str | Path | None = None,
-                     model: Optional[str] = None,
-                     project_path: Optional[str | Path] = None) -> str:
-    """Findings JSON (+ optional manifest for real source) in, report.md out.
-    No network access to any target."""
-    logger.info("Generating report from %s -> %s", findings_path, report_path)
-    findings = load_findings(findings_path)
-    scorecard = compute_scorecard(findings)
-    manifest = Manifest.from_yaml(manifest_path) if manifest_path else None
-    
-    # Infer project path if not explicitly provided
-    resolved_proj_path = project_path
-    if not resolved_proj_path and manifest_path:
-        resolved_proj_path = Path(manifest_path).resolve().parent
-
 def _deterministic_report_fallback(
     findings: dict[str, Any], scorecard: dict[str, Any], manifest: Manifest | None = None
 ) -> Report:
@@ -354,6 +431,7 @@ def _deterministic_report_fallback(
         findings=confirmed,
         severity=severity,
         remediation=remediation,
+        generated_by="deterministic_fallback",
     )
 
 
@@ -427,6 +505,10 @@ def generate_report(findings_path: str | Path, report_path: str | Path,
                 payload={"error": f"crew kickoff failed: {last_error}", "detail": "running deterministic Report fallback"},
             ))
         report = _deterministic_report_fallback(findings, scorecard, manifest)
+    else:
+        report.generated_by = "llm"
+
+    report = _enrich_report(report, manifest, resolved_proj_path)
 
     Path(report_path).with_suffix(".json").write_text(report.model_dump_json(indent=2), encoding="utf-8")
     report_md = _report_markdown(report)

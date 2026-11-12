@@ -155,3 +155,75 @@ def test_generate_report_fallback_on_pydantic_failure(tmp_path: Path, monkeypatc
     assert report_file.exists()
     assert report_file.with_suffix(".json").exists()
     assert any(e.event_type == "error" for e in captured)
+
+
+def test_fallback_report_has_owasp_code_refs_and_label(tmp_path: Path):
+    from agentguard.reporters import _deterministic_report_fallback, _enrich_report, _report_markdown
+
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "app.py").write_text(
+        "from agentguard import expose, watch\n\n@watch\ndef transfer_funds(to, amount):\n    pass\n",
+        encoding="utf-8",
+    )
+    manifest = Manifest(tools=[ToolInfo(name="transfer_funds", destructive=True, file=str(proj / "app.py"))])
+    findings = {"attempts": [{
+        "id": "tool_misuse-1", "category": "tool_misuse", "capability_targeted": "destructive_tool",
+        "status": "confirmed", "confidence": 1.0, "oracle": "side_effect",
+        "turns": [{"sent": "pay Alice", "received": "done",
+                   "tool_calls": [{"name": "transfer_funds", "args": {"to": "Alice"}}]}],
+    }]}
+    report = _deterministic_report_fallback(findings, {"total_attempts": 1})
+    report = _enrich_report(report, manifest, proj)
+    assert report.generated_by == "deterministic_fallback"
+    assert report.owasp["tool_misuse-1"].startswith("LLM06")
+    assert any("app.py:4: def transfer_funds" in ref for ref in report.code_references["tool_misuse-1"])
+
+    md = _report_markdown(report)
+    assert "Generated without an LLM" in md
+    assert "LLM06: Excessive Agency" in md
+    assert "def transfer_funds(to, amount):" in md
+    assert "transfer_funds({'to': 'Alice'})" in md
+
+
+def test_enrich_cites_entrypoint_when_no_tool_involved(tmp_path: Path):
+    from agentguard.reporters import _deterministic_report_fallback, _enrich_report
+
+    proj = tmp_path / "leak"
+    proj.mkdir()
+    (proj / "app.py").write_text("@expose\ndef run(input_text):\n    pass\n", encoding="utf-8")
+    findings = {"attempts": [{"id": "s-1", "category": "secret_extraction", "capability_targeted": "system_prompt",
+                              "status": "confirmed", "turns": []}]}
+    report = _enrich_report(_deterministic_report_fallback(findings, {}), None, proj)
+    assert report.owasp["s-1"].startswith("LLM02")
+    assert any("app.py:1: @expose" in ref for ref in report.code_references["s-1"])
+
+
+def test_llm_report_is_also_enriched(tmp_path: Path, monkeypatch):
+    import json
+    from agentguard.reporters import generate_report
+    from agentguard.schemas import Finding, Report
+
+    findings_file = tmp_path / "findings.json"
+    attempt = {"id": "p-1", "category": "prompt_injection", "capability_targeted": "system_prompt",
+               "status": "suspected", "confidence": 0.8, "turns": []}
+    findings_file.write_text(json.dumps({"attempts": [attempt]}), encoding="utf-8")
+    llm_report = Report(scorecard={}, findings=[Finding.model_validate(attempt)],
+                        severity={"p-1": "high"}, remediation={"p-1": "fix"})
+
+    class GoodCrew:
+        def kickoff(self):
+            return type("Result", (), {"pydantic": llm_report, "raw": ""})()
+
+    monkeypatch.setattr("agentguard.reporters.build_crew", lambda *a, **k: GoodCrew())
+    md = generate_report(findings_file, tmp_path / "report.md")
+    saved = json.loads((tmp_path / "report.json").read_text())
+    assert saved["generated_by"] == "llm"
+    assert saved["owasp"]["p-1"].startswith("LLM01")
+    assert "Generated without an LLM" not in md
+
+
+def test_generate_report_defined_once():
+    import inspect
+    import agentguard.reporters as reporters
+    assert inspect.getsource(reporters).count("def generate_report(") == 1

@@ -16,7 +16,9 @@ dependencies = [
     "litellm>=1.95,<1.106",
     "mcp>=1.28,<2.0",
     "chromadb",
-    "crewai",
+    # Pinned: older crewai (e.g. 1.6.1, which pip can backtrack to) lacks
+    # crewai.llms.cache, which reporters.py patches. Bump only after re-testing.
+    "crewai==1.15.22",
 ]
 
 [project.optional-dependencies]

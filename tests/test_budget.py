@@ -59,3 +59,22 @@ def test_budget_no_ceiling_never_raises():
         tracker.record("attacker", prompt_tokens=50, completion_tokens=50)
     report = tracker.usage_report()
     assert report["total"]["calls"] == 100
+
+
+def test_budget_emits_usage_and_exceeded_events():
+    from agentguard.events import get_event_bus, reset_event_bus
+
+    reset_event_bus()
+    captured = []
+    get_event_bus().subscribe(captured.append)
+    tracker = BudgetTracker(BudgetConfig(max_calls_total=1))
+    assert not tracker.exhausted
+    tracker.record("judge", prompt_tokens=7, completion_tokens=3)
+    with pytest.raises(BudgetExceededError):
+        tracker.record("judge", prompt_tokens=1, completion_tokens=1)
+    assert tracker.exhausted
+    types = [e.event_type for e in captured]
+    assert types == ["llm_usage", "budget_exceeded"]
+    assert captured[0].payload["total_tokens"] == 10
+    # A rejected call is not charged.
+    assert tracker.usage_report()["total"]["calls"] == 1

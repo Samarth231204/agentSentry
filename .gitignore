@@ -7,9 +7,17 @@ dist/
 build/
 .pytest_cache/
 .chroma/
+
+# Per-run outputs of `agentguard test` / `agentguard report` (regenerated on
+# every run; trace.jsonl is append-only). Anchored to the repo root so the
+# archived evidence under .integration/ stays tracked.
+/trace.jsonl
+/report.json
 report.md
 findings.json
 manifest.yaml
+
+# Secrets
 .env
 .claude/
 
