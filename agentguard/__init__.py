@@ -1,4 +1,4 @@
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from agentguard.adapter import expose, watch
 from agentguard.config import AgentGuardConfig, get_config, normalize_model

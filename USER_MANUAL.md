@@ -1,5 +1,8 @@
 # AgentGuard User Manual
 
+> **Note (0.2.0):** the dashboard is now the main way to use AgentGuard. See [README.md](README.md) for the dashboard flow. The command reference below still applies to the manual CLI path.
+
+
 Welcome to **AgentGuard**, an automated red-teaming and vulnerability assessment tool designed specifically for AI agents and LLM-powered applications. 
 
 This manual guides you through installing AgentGuard, instrumenting your AI agents, running security scans, and interpreting vulnerability reports on your local machine.

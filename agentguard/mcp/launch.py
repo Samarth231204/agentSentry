@@ -30,6 +30,11 @@ class RunningServer:
     tools: list[str]
 
 
+def _package_parent() -> str:
+    import agentguard as _pkg
+    return str(Path(_pkg.__file__).resolve().parents[1])
+
+
 def free_port(preferred: int) -> int:
     for port in (preferred, 0):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -50,7 +55,7 @@ def start_server(name: str, project: Path, port: Optional[int] = None, wait: flo
     proc = subprocess.Popen(cmd, cwd=str(Path(project).resolve()), stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL, start_new_session=True,
                             env={**os.environ, "PYTHONPATH": os.pathsep.join(
-                                p for p in [os.environ.get("PYTHONPATH", "")] if p)})
+                                p for p in [_package_parent(), os.environ.get("PYTHONPATH", "")] if p)})
     url = f"http://127.0.0.1:{chosen}/mcp"
     spec = ServerSpec(name=name, transport="http", url=url)
     deadline = time.time() + wait

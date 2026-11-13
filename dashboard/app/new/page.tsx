@@ -20,6 +20,7 @@ export default function NewRunPage() {
   const [maxTokens, setMaxTokens] = useState("");
   const [mock, setMock] = useState(false);
   const [replayRunId, setReplayRunId] = useState("");
+  const [useA2a, setUseA2a] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,6 +40,7 @@ export default function NewRunPage() {
       max_tokens: optionalInt(maxTokens),
       mock,
       replay_run_id: replayRunId.trim() || undefined,
+      use_a2a: useA2a,
     };
     try {
       const status = await postJSON<RunStatus>("/api/runs", body);
@@ -111,6 +113,10 @@ export default function NewRunPage() {
             <br />
             <input type="text" value={replayRunId} onChange={(e) => setReplayRunId(e.target.value)}
               placeholder="e.g. run-20261113-170057-8948-a1e99a8d" style={{ width: 360, maxWidth: "100%" }} />
+          </label>
+          <label className="small" style={{ display: "block", marginBottom: 10 }}>
+            <input type="checkbox" checked={useA2a} onChange={(e) => setUseA2a(e.target.checked)} />{" "}
+            Run discovery, attacker and reporter as A2A agents (agent cards and JSON-RPC, shown in the trace)
           </label>
           <label className="small" style={{ display: "block", marginBottom: 10 }}>
             <input type="checkbox" checked={reviewPlan} onChange={(e) => setReviewPlan(e.target.checked)} disabled={mode !== "auto"} />{" "}

@@ -92,6 +92,7 @@ export function RunProgress({ runId, onFinished }: { runId: string; onFinished: 
             );
           })}
       </div>
+      <p className="small muted">Transport: {status.transport === "a2a" ? "A2A agents" : "in-process"}</p>
       {status.mock ? (
         <p className="small muted">Mock mode: no provider calls were made, so no result says anything about your app.</p>
       ) : null}

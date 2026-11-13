@@ -1,6 +1,6 @@
 [project]
 name = "agentguard"
-version = "0.1.0"
+version = "0.2.0"
 description = "Automated red-teaming for AI agent applications"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -39,7 +39,7 @@ build-backend = "setuptools.build_meta"
 include = ["agentguard*"]
 
 [tool.setuptools.package-data]
-agentguard = ["probes/*.yaml", "discovery/rules/*.yaml"]
+agentguard = ["probes/*.yaml", "discovery/rules/*.yaml", "server/static/*", "server/static/**/*"]
 
 [tool.pytest.ini_options]
 filterwarnings = [

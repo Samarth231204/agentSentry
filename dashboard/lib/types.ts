@@ -164,6 +164,7 @@ export interface RunStatus {
   cancel_requested: boolean;
   awaiting_plan: boolean;
   automatic: boolean;
+  transport: "a2a" | "in_process";
   mock: boolean;
 }
 

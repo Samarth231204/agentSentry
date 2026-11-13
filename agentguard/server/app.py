@@ -12,7 +12,8 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -84,6 +85,7 @@ class RunIn(BaseModel):
     mock: bool = False
     review_plan: bool = True
     replay_run_id: Optional[str] = Field(default=None, max_length=80)
+    use_a2a: bool = False
 
 
 class PlanEditIn(BaseModel):
@@ -94,6 +96,34 @@ class PlanEditIn(BaseModel):
 
 class PlanApproveIn(BaseModel):
     edits: list[PlanEditIn] = Field(default_factory=list, max_length=500)
+
+
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+
+def static_dashboard_ready() -> bool:
+    return (STATIC_DIR / "index.html").is_file()
+
+
+def _static_file(path: str) -> FileResponse:
+    """Maps URL paths to the exported pages: / -> index.html, /run -> run/index.html, ..."""
+    rel = path.strip("/")
+    candidates = [
+        STATIC_DIR / "index.html" if not rel else STATIC_DIR / rel / "index.html",
+        STATIC_DIR / f"{rel}.html",
+        STATIC_DIR / rel,
+    ]
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        if (resolved == STATIC_DIR.resolve() or STATIC_DIR.resolve() in resolved.parents) and resolved.is_file():
+            return FileResponse(resolved)
+    not_found = STATIC_DIR / "404.html"
+    if not_found.is_file():
+        return FileResponse(not_found, status_code=404)
+    raise HTTPException(status_code=404, detail="not found")
 
 
 def _no_store(response: Response) -> None:
@@ -208,6 +238,43 @@ def create_app(
 
     # ----- settings and API keys (Phase 2) -----------------------------------
 
+    # ----- A2A: agent cards and JSON-RPC message/send (Phase 6) -------------------
+
+    @app.get("/a2a/{agent}/.well-known/agent.json")
+    def a2a_card(agent: str, request: Request) -> dict[str, Any]:
+        from agentguard.a2a.protocol import AGENTS, agent_card
+        if agent not in AGENTS:
+            raise HTTPException(status_code=404, detail="unknown agent")
+        return agent_card(agent, str(request.base_url))
+
+    @app.post("/a2a/{agent}")
+    async def a2a_rpc(agent: str, request: Request) -> JSONResponse:
+        from starlette.concurrency import run_in_threadpool
+        from agentguard.a2a import protocol
+        from agentguard.a2a.agents import HANDLERS
+        if agent not in HANDLERS:
+            return JSONResponse(protocol.rpc_error(None, "method_not_found", "unknown agent"), status_code=404)
+        try:
+            body = await request.json()
+        except ValueError:
+            return JSONResponse(protocol.rpc_error(None, "parse"))
+        request_id = body.get("id") if isinstance(body, dict) else None
+        if not isinstance(body, dict) or body.get("jsonrpc") != "2.0":
+            return JSONResponse(protocol.rpc_error(request_id, "invalid_request"))
+        if body.get("method") != "message/send":
+            return JSONResponse(protocol.rpc_error(request_id, "method_not_found", str(body.get("method"))))
+        try:
+            payload = protocol.request_payload(body["params"]["message"]["parts"])
+        except (KeyError, TypeError, ValueError):
+            return JSONResponse(protocol.rpc_error(request_id, "invalid_params", "expected one JSON text part"))
+        try:
+            result = await run_in_threadpool(HANDLERS[agent], Path(project_root), payload)
+        except ValueError as exc:
+            return JSONResponse(protocol.rpc_error(request_id, "invalid_params", str(exc)))
+        except Exception as exc:  # noqa: BLE001 - no traceback to the caller
+            return JSONResponse(protocol.rpc_error(request_id, "internal", type(exc).__name__))
+        return JSONResponse(protocol.rpc_result(request_id, result))
+
     @app.get("/api/settings")
     def get_settings(response: Response) -> dict[str, Any]:
         _no_store(response)
@@ -266,6 +333,7 @@ def create_app(
             mock=body.mock,
             review_plan=body.review_plan,
             replay_run_id=body.replay_run_id or None,
+            use_a2a=body.use_a2a,
         )
         try:
             handle = manager.start(spec)
@@ -322,5 +390,9 @@ def create_app(
             return manager.cancel(run_id).as_dict()
         except KeyError:
             raise HTTPException(status_code=404, detail="No live status for this run.")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def dashboard(path: str) -> FileResponse:
+        return _static_file(path)
 
     return app

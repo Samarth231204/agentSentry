@@ -74,7 +74,9 @@ def test_mock_run_does_not_leak_the_mock_flag(project, monkeypatch):
     assert "AGENTGUARD_LLM_MOCK" not in os.environ
 
 
-def test_cancel_stops_the_run_and_the_target(project):
+def test_cancel_stops_the_run_and_the_target(project, monkeypatch):
+    # A cooldown keeps the mock attack running long enough for the cancel to land mid-attack.
+    monkeypatch.setenv("AGENTGUARD_CATEGORY_COOLDOWN", "3")
     manager = RunManager(project)
     handle = manager.start(RunSpec(target_app="app:app", mock=True, max_probes=2))
     deadline = time.time() + 60
@@ -178,3 +180,12 @@ def test_cancel_while_waiting_for_plan_review(stripped_project):
     _wait(handle)
     assert handle.state == "cancelled"
     assert not (handle.run_dir / "findings.json").exists()
+
+
+def test_a_project_folder_named_agentguard_does_not_shadow_the_package(stripped_project):
+    """Regression: a clone of AgentGuard inside the project is a folder named `agentguard`."""
+    (stripped_project / "agentguard").mkdir()
+    (stripped_project / "agentguard" / "README.md").write_text("clone folder, not a package")
+    handle = RunManager(stripped_project).start(RunSpec(mock=True, max_probes=1, review_plan=False))
+    _wait(handle)
+    assert handle.state == "done", handle.error

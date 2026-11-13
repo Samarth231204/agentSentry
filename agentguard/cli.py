@@ -4,6 +4,7 @@ from typing import Optional
 
 import click
 
+from agentguard import __version__
 from agentguard.attackers import run_attack_suite_sync
 from agentguard.budget import BudgetConfig, BudgetTracker
 from agentguard.config import AgentGuardConfig, get_config, set_config
@@ -18,6 +19,7 @@ logger = get_logger("cli")
 
 
 @click.group()
+@click.version_option(__version__, prog_name="agentguard")
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose debug logging.")
 @click.option("-q", "--quiet", is_flag=True, help="Enable quiet mode (errors only).")
 @click.option("--config", "config_file", type=click.Path(exists=True, dir_okay=False), help="Path to custom agentguard.yaml configuration file.")
@@ -234,6 +236,9 @@ def up(project_path: str, port: int, dashboard_port: int, run_dirs: tuple[str, .
         allowed_origins=[f"http://localhost:{dashboard_port}", f"http://127.0.0.1:{dashboard_port}"],
     )
 
+    import os as _os
+    _os.environ["AGENTGUARD_A2A_URL"] = backend_url  # the runner reaches the A2A agents on the same backend
+
     mcp_servers = []
     if not no_mcp:
         from agentguard.mcp import launch
@@ -245,7 +250,12 @@ def up(project_path: str, port: int, dashboard_port: int, run_dirs: tuple[str, .
             click.echo(f"MCP servers not started: {exc}. Runs will use the built-in fallbacks.")
 
     dashboard_proc = None
-    if not no_dashboard:
+    from agentguard.server.app import static_dashboard_ready
+    if not no_dashboard and static_dashboard_ready():
+        click.echo(f"Dashboard at {backend_url}/ (served by the backend; no Node needed)")
+        if not no_browser:
+            threading.Timer(1.5, webbrowser.open, args=(f"{backend_url}/",)).start()
+    elif not no_dashboard:
         ready, reason = launcher.dashboard_status()
         if ready:
             dashboard_proc = launcher.start_dashboard(backend_url, dashboard_port)
@@ -305,6 +315,66 @@ def mcp_serve(name: str, project: str, port: Optional[int]) -> None:
         from agentguard.mcp.security_kb_server import main as serve_main
     _sys.argv = argv
     serve_main()
+
+
+@main.command()
+@click.option("--project", "project_path", default=".", type=click.Path(exists=True, file_okay=False),
+              help="The project that will contain the AgentGuard folder.")
+def bootstrap(project_path: str) -> None:
+    """Keep AgentGuard's files out of git: adds this clone and .agentguard/ to the project's .gitignore."""
+    project = Path(project_path).resolve()
+    clone = Path(__file__).resolve().parents[1]
+    entries: list[str] = []
+    try:
+        entries.append(clone.relative_to(project).as_posix() + "/")
+    except ValueError:
+        click.echo(f"Note: AgentGuard is not inside {project}; only .agentguard/ will be ignored.")
+    entries.append(".agentguard/")
+    gitignore = project / ".gitignore"
+    existing = gitignore.read_text(encoding="utf-8").splitlines() if gitignore.exists() else []
+    missing = [e for e in entries if e not in {line.strip() for line in existing}]
+    if missing:
+        block = ["", "# AgentGuard (added by `agentguard bootstrap`)"] + missing
+        gitignore.write_text("\n".join(existing + block) + "\n", encoding="utf-8")
+        click.echo(f"Added to {gitignore}: {', '.join(missing)}")
+    else:
+        click.echo(f"{gitignore} already ignores AgentGuard.")
+    (project / ".agentguard").mkdir(exist_ok=True)
+    click.echo(f"Next: agentguard up --project {project}")
+
+
+@main.command()
+def doctor() -> None:
+    """Checks what AgentGuard needs on this machine. Prints presence only, never key values."""
+    import os as _os
+    import shutil as _shutil
+    import socket as _socket
+    import sys as _sys
+
+    from agentguard.server.app import static_dashboard_ready
+    from agentguard.server.keys import PROVIDERS, read_keys
+    from agentguard.mcp.semgrep import semgrep_spec
+
+    def line(ok: bool, label: str, hint: str = "") -> None:
+        click.echo(f"[{'ok' if ok else 'missing'}] {label}" + (f" — {hint}" if hint and not ok else ""))
+
+    line(_sys.version_info >= (3, 10), f"Python {_sys.version.split()[0]} (3.10+ required)")
+    line(static_dashboard_ready(), "dashboard build", "run scripts/build_dashboard.sh (developers only)")
+    line(_shutil.which("node") is not None, "Node.js (optional: only for dashboard development)")
+    line(_shutil.which("uvx") is not None, "uvx (for Semgrep's MCP server)", "install uv: https://docs.astral.sh/uv/")
+    spec, reason = semgrep_spec()
+    line(spec is not None, "Semgrep (sink evidence, optional)", reason)
+
+    project = Path(".").resolve()
+    stored = read_keys(project)
+    for pid, meta in PROVIDERS.items():
+        present = pid in stored or bool(_os.environ.get(meta["env"]))
+        line(present, f"{meta['label']} key {'set' if present else 'not set'} (optional, one is needed for live runs)")
+
+    for port in (8787, 8790, 8791, 3000):
+        with _socket.socket() as s:
+            busy = s.connect_ex(("127.0.0.1", port)) == 0
+        line(not busy, f"port {port} free", "something is already listening; stop it or pick another port")
 
 
 if __name__ == "__main__":

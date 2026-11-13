@@ -84,6 +84,7 @@ class RunSpec:
     mock: bool = False
     review_plan: bool = True
     replay_run_id: Optional[str] = None  # re-send the probes of an earlier run, in order
+    use_a2a: bool = False  # run discovery, attacker and reporter as A2A agents
 
     @property
     def automatic(self) -> bool:
@@ -153,8 +154,17 @@ class RunHandle:
             "cancel_requested": self.cancel_requested,
             "awaiting_plan": self.awaiting_plan,
             "automatic": self.spec.automatic,
+            "transport": "a2a" if self.spec.use_a2a else "in_process",
             "mock": self.spec.mock,
         }
+
+
+def package_parent() -> str:
+    """The folder that contains the real `agentguard` package. Put first on sys.path for every
+    AgentGuard subprocess, so a project folder that happens to be called `agentguard` (for example a
+    clone) is never mistaken for the package (a namespace package without __init__.py)."""
+    import agentguard as _pkg
+    return str(Path(_pkg.__file__).resolve().parents[1])
 
 
 def _free_port() -> int:
@@ -310,11 +320,27 @@ class RunManager:
                 else:
                     os.environ[MOCK_ENV] = prior_mock
 
+    def _a2a_base(self) -> str:
+        base = os.environ.get("AGENTGUARD_A2A_URL")
+        if not base:
+            raise RuntimeError("A2A is not available: the agents are served by `agentguard up`.")
+        return base
+
     def _automatic_front(self, h: RunHandle, cfg) -> tuple[str, Manifest]:
         self._phase(h, "discover", "running")
         cache = self.project_root / ".agentguard" / "cache" / "discovery"
-        enrich = scan_sinks if os.environ.get("AGENTGUARD_SEMGREP", "1") != "0" else None
-        result = discover(self.project_root, cache_dir=cache, enrich=enrich)
+        if h.spec.use_a2a:
+            from agentguard.a2a.client import call_agent
+            from agentguard.discovery.candidates import Candidate
+            data = call_agent(self._a2a_base(), "discovery", {})
+            result = DiscoveryResult(
+                root=data["root"], files_scanned=data["files_scanned"], frameworks=data["frameworks"],
+                enrichment=data["enrichment"], errors=data["errors"],
+                candidates=[Candidate(**c) for c in data["candidates"]],
+            )
+        else:
+            enrich = scan_sinks if os.environ.get("AGENTGUARD_SEMGREP", "1") != "0" else None
+            result = discover(self.project_root, cache_dir=cache, enrich=enrich)
         h.discovery = result
         (h.run_dir / "discovery.json").write_text(
             json.dumps({
@@ -421,24 +447,44 @@ class RunManager:
         self._phase(h, "attack", "running")
         budget = h.budget
         probes = h.spec.max_probes or cfg.max_probes
-        sink_obj = self._attack(h, url, manifest, budget, probes)
-        findings = {
-            "target": sink_obj.target_desc,
-            "manifest_summary": sink_obj.manifest_summary,
-            "attempts": sink_obj.session_state.get(
-                "findings", [a.model_dump(mode="json") for a in sink_obj.attempts]),
-            "budget_usage": budget.usage_report(),
-        }
+        if h.spec.use_a2a:
+            from agentguard.a2a.client import call_agent
+            findings = call_agent(self._a2a_base(), "attacker", {
+                "target_url": url,
+                "manifest": {"tools": [vars(t) for t in manifest.tools], "rag": manifest.rag,
+                             "memory": manifest.memory},
+                "canaries": h.spec.canaries, "max_probes": probes,
+                "max_llm_calls": h.spec.max_llm_calls, "max_tokens": h.spec.max_tokens,
+                "profile": h.profile.model_dump() if h.profile else None,
+                "replay": h.replay,
+            })
+        else:
+            sink_obj = self._attack(h, url, manifest, budget, probes)
+            findings = {
+                "target": sink_obj.target_desc,
+                "manifest_summary": sink_obj.manifest_summary,
+                "attempts": sink_obj.session_state.get(
+                    "findings", [a.model_dump(mode="json") for a in sink_obj.attempts]),
+                "budget_usage": budget.usage_report(),
+            }
         (h.run_dir / "findings.json").write_text(json.dumps(findings, indent=2), encoding="utf-8")
         self._phase(h, "attack", "done")
 
         self._check_cancel(h)
         self._phase(h, "report", "running")
-        generate_report(
-            h.run_dir / "findings.json", h.run_dir / "report.md",
-            manifest_path=h.run_dir / "manifest.yaml", project_path=self.project_root,
-            model=cfg.reporter_model, use_llm=not h.spec.mock,
-        )
+        if h.spec.use_a2a:
+            from agentguard.a2a.client import call_agent
+            manifest_yaml = (h.run_dir / "manifest.yaml").read_text(encoding="utf-8")
+            report = call_agent(self._a2a_base(), "reporter", {
+                "findings": findings, "manifest_yaml": manifest_yaml, "mock": h.spec.mock})
+            (h.run_dir / "report.md").write_text(report["markdown"], encoding="utf-8")
+            (h.run_dir / "report.json").write_text(json.dumps(report["json"], indent=2), encoding="utf-8")
+        else:
+            generate_report(
+                h.run_dir / "findings.json", h.run_dir / "report.md",
+                manifest_path=h.run_dir / "manifest.yaml", project_path=self.project_root,
+                model=cfg.reporter_model, use_llm=not h.spec.mock,
+            )
         self._phase(h, "report", "done")
 
     def _mark_unfinished(self, h: RunHandle, state: str) -> None:
@@ -474,7 +520,8 @@ class RunManager:
     def _start_target(self, h: RunHandle, app: str, extra_path: Optional[str]) -> str:
         port = _free_port()
         url = f"http://127.0.0.1:{port}"
-        paths = [p for p in [extra_path, str(self.project_root), os.environ.get("PYTHONPATH", "")] if p]
+        paths = [p for p in [package_parent(), extra_path, str(self.project_root),
+                             os.environ.get("PYTHONPATH", "")] if p]
         env = {**os.environ, "PYTHONPATH": os.pathsep.join(paths)}
         with open(h.run_dir / "target.log", "w", encoding="utf-8") as log:
             proc = subprocess.Popen(
