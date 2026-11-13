@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from agentguard.discovery.symbols import (
     EXPOSE_DECORATOR, FileInfo, FunctionInfo, MEMORY_CALLS, RETRIEVAL_CALLS, TOOL_DECORATORS,
@@ -65,6 +65,7 @@ class DiscoveryResult:
     frameworks: list[str] = field(default_factory=list)
     candidates: list[Candidate] = field(default_factory=list)
     errors: list[dict[str, str]] = field(default_factory=list)
+    enrichment: str = "off"  # "semgrep" when sink rules were applied, "unavailable", or "off"
 
     def by_id(self) -> dict[str, Candidate]:
         return {c.id: c for c in self.candidates}
@@ -158,10 +159,13 @@ def _snippet(path: Path, start: int, end: int, limit: int = 40) -> str:
     return "\n".join(f"{n:5d}  {lines[n - 1]}" for n in range(start, min(end, start + limit - 1, len(lines)) + 1))
 
 
-def discover(project_root: Path, cache_dir: Optional[Path] = None) -> DiscoveryResult:
+def discover(project_root: Path, cache_dir: Optional[Path] = None,
+             enrich: Optional[Callable[[list[tuple[str, str]]], Optional[list[dict]]]] = None) -> DiscoveryResult:
+    """Scores every function. `enrich` (optional) returns Semgrep-style sink findings for the files."""
     root = Path(project_root).resolve()
     result = DiscoveryResult(root=str(root))
     frameworks: set[str] = set()
+    file_infos: dict[str, FileInfo] = {}
     for path in iter_python_files(root):
         result.files_scanned += 1
         try:
@@ -173,6 +177,7 @@ def discover(project_root: Path, cache_dir: Optional[Path] = None) -> DiscoveryR
             result.errors.append({"file": info.path, "error": info.parse_error})
             continue
         frameworks.update(info.frameworks)
+        file_infos[info.path] = info
         for fn in info.functions:
             for role, conf, signals, destructive in _candidates_for(info, fn):
                 if conf < AMBIGUOUS:
@@ -193,5 +198,52 @@ def discover(project_root: Path, cache_dir: Optional[Path] = None) -> DiscoveryR
                     snippet=_snippet(path, fn.lineno, fn.end_lineno),
                 ))
     result.frameworks = sorted(frameworks)
+    if enrich is not None:
+        texts = [(rel, (root / rel).read_text(encoding="utf-8", errors="replace")) for rel in sorted(file_infos)]
+        findings = enrich(texts)
+        if findings is None:
+            result.enrichment = "unavailable"
+        else:
+            result.enrichment = "semgrep"
+            _apply_sink_findings(result, file_infos, findings)
     result.candidates.sort(key=lambda c: (c.file, c.line, c.role))
     return result
+
+
+SINK_ROLE = {"smtp": "watch_outbound", "http": "watch_outbound", "process": "watch", "file": "watch"}
+
+
+def _apply_sink_findings(result: DiscoveryResult, file_infos: dict[str, FileInfo], findings: list[dict]) -> None:
+    """Each sink hit adds evidence to the function that contains it. Unknown functions become candidates."""
+    by_key = {(c.file, c.qualname, c.role): c for c in result.candidates}
+    for hit in findings:
+        info = file_infos.get(hit["path"])
+        if info is None:
+            continue
+        containing = [fn for fn in info.functions
+                      if fn.lineno <= hit["line"] <= fn.end_lineno]
+        if not containing:
+            continue
+        fn = min(containing, key=lambda f: f.end_lineno - f.lineno)  # innermost function
+        kind = next((k for k in SINK_ROLE if k in hit["check_id"]), "process")
+        role = SINK_ROLE[kind]
+        note = f"semgrep {hit['check_id']} at line {hit['line']}"
+        existing = by_key.get((info.path, fn.qualname, role))
+        if existing is not None:
+            existing.signals.append(note)
+            existing.destructive = existing.destructive or role in ("watch", "watch_outbound")
+            existing.confidence = round(max(existing.confidence, 0.85), 2)
+            continue
+        cand = Candidate(
+            id=_candidate_id(info.path, fn.qualname, role), role=role, file=info.path,
+            module=info.module, qualname=fn.qualname, name=_last(fn.qualname),
+            line=fn.lineno, end_line=fn.end_lineno, confidence=0.85,
+            signals=[note], destructive=True, is_method=fn.is_method,
+            snippet=_snippet(root_path(result) / info.path, fn.lineno, fn.end_lineno),
+        )
+        result.candidates.append(cand)
+        by_key[(info.path, fn.qualname, role)] = cand
+
+
+def root_path(result: DiscoveryResult) -> Path:
+    return Path(result.root)

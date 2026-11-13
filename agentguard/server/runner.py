@@ -42,6 +42,7 @@ from agentguard.discovery.plan import InstrumentationPlan, apply_user_edits, bui
 from agentguard.events import JSONLFileSink, get_event_bus
 from agentguard.instrument.target import TARGET_MODULE, write_target
 from agentguard.llm_mock import MOCK_ENV
+from agentguard.mcp.semgrep import scan_sinks
 from agentguard.logging import get_logger
 from agentguard.manifest import Manifest, synthesize
 from agentguard.reporters import generate_report
@@ -302,18 +303,20 @@ class RunManager:
     def _automatic_front(self, h: RunHandle, cfg) -> tuple[str, Manifest]:
         self._phase(h, "discover", "running")
         cache = self.project_root / ".agentguard" / "cache" / "discovery"
-        result = discover(self.project_root, cache_dir=cache)
+        enrich = scan_sinks if os.environ.get("AGENTGUARD_SEMGREP", "1") != "0" else None
+        result = discover(self.project_root, cache_dir=cache, enrich=enrich)
         h.discovery = result
         (h.run_dir / "discovery.json").write_text(
             json.dumps({
                 "root": result.root,
                 "files_scanned": result.files_scanned,
                 "frameworks": result.frameworks,
+                "enrichment": result.enrichment,
                 "errors": result.errors,
                 "candidates": [vars(c) for c in result.candidates],
             }, indent=2), encoding="utf-8")
         self._emit("discovery_done", files=result.files_scanned, candidates=len(result.candidates),
-                   frameworks=result.frameworks)
+                   frameworks=result.frameworks, enrichment=result.enrichment)
         self._check_cancel(h)
         self._phase(h, "discover", "done")
 

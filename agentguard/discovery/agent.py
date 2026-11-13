@@ -86,11 +86,20 @@ def parse_decisions(text: str, known_ids: set[str]) -> dict[str, AgentDecision]:
 
 
 async def _run_agent(candidates: list[Candidate], model_name: str) -> str:
+    import os
     model = ScriptedDiscoveryModel(model="mock") if mock_enabled() else None
     if model is None:
         from google.adk.models.lite_llm import LiteLlm
         model = LiteLlm(model=normalize_model(model_name))
-    agent = LlmAgent(name="discovery", model=model, instruction=INSTRUCTION)
+    tools: list = []
+    url = os.environ.get("AGENTGUARD_CODEINTEL_URL")
+    if url and not mock_enabled():
+        from google.adk.tools.mcp_tool.mcp_toolset import McpToolset, StreamableHTTPConnectionParams
+        tools.append(McpToolset(
+            connection_params=StreamableHTTPConnectionParams(url=url),
+            tool_filter=["read_span", "callers", "callees", "get_symbol"],
+        ))
+    agent = LlmAgent(name="discovery", model=model, instruction=INSTRUCTION, tools=tools)
     sessions = InMemorySessionService()
     session = await sessions.create_session(app_name="agentguard", user_id="ag")
     runner = Runner(agent=agent, app_name="agentguard", session_service=sessions)

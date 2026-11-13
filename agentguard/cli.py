@@ -210,8 +210,9 @@ def report(project_path: str, findings_path: str, report_out: str,
               help="Extra folder to show as one run (repeatable).")
 @click.option("--no-dashboard", is_flag=True, help="Start only the backend API.")
 @click.option("--no-browser", is_flag=True, help="Do not open the dashboard in a browser.")
+@click.option("--no-mcp", is_flag=True, help="Do not start AgentGuard's MCP servers.")
 def up(project_path: str, port: int, dashboard_port: int, run_dirs: tuple[str, ...],
-       no_dashboard: bool, no_browser: bool) -> None:
+       no_dashboard: bool, no_browser: bool, no_mcp: bool) -> None:
     """Start the local backend and dashboard, then open the dashboard.
 
     Serves the API at http://127.0.0.1:PORT and the dashboard at
@@ -233,6 +234,16 @@ def up(project_path: str, port: int, dashboard_port: int, run_dirs: tuple[str, .
         allowed_origins=[f"http://localhost:{dashboard_port}", f"http://127.0.0.1:{dashboard_port}"],
     )
 
+    mcp_servers = []
+    if not no_mcp:
+        from agentguard.mcp import launch
+        try:
+            mcp_servers = launch.start_all(Path(project_path))
+            for server in mcp_servers:
+                click.echo(f"MCP {server.name} at {server.url} ({len(server.tools)} tools)")
+        except RuntimeError as exc:
+            click.echo(f"MCP servers not started: {exc}. Runs will use the built-in fallbacks.")
+
     dashboard_proc = None
     if not no_dashboard:
         ready, reason = launcher.dashboard_status()
@@ -249,6 +260,51 @@ def up(project_path: str, port: int, dashboard_port: int, run_dirs: tuple[str, .
         uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
     finally:
         launcher.stop_dashboard(dashboard_proc)
+        from agentguard.mcp import launch as _launch
+        _launch.stop_all(mcp_servers)
+
+
+@main.group()
+def mcp() -> None:
+    """Run or check AgentGuard's MCP servers (code intelligence and security knowledge)."""
+
+
+@mcp.command("list")
+@click.argument("project_path", default=".", type=click.Path(exists=True, file_okay=False))
+def mcp_list(project_path: str) -> None:
+    """Start both servers for PROJECT_PATH, print their tools, and stop them again."""
+    from agentguard.mcp import launch
+    from agentguard.mcp.semgrep import semgrep_spec
+
+    servers = launch.start_all(Path(project_path))
+    try:
+        for server in servers:
+            click.echo(f"{server.name}: {server.url}")
+            for tool in server.tools:
+                click.echo(f"  - {tool}")
+    finally:
+        launch.stop_all(servers)
+    _, reason = semgrep_spec()
+    click.echo(f"semgrep (external): {'available' if reason == 'ok' else reason}")
+
+
+@mcp.command("serve")
+@click.argument("name", type=click.Choice(["codeintel", "security-kb"]))
+@click.option("--project", default=".", type=click.Path(exists=True, file_okay=False),
+              help="Project for the codeintel server.")
+@click.option("--port", default=None, type=click.IntRange(1, 65535))
+def mcp_serve(name: str, project: str, port: Optional[int]) -> None:
+    """Run one server in the foreground (Streamable HTTP on 127.0.0.1)."""
+    import sys as _sys
+
+    argv = ["agentguard-mcp", "--port", str(port or (8790 if name == "codeintel" else 8791))]
+    if name == "codeintel":
+        argv += ["--project", str(Path(project).resolve())]
+        from agentguard.mcp.codeintel_server import main as serve_main
+    else:
+        from agentguard.mcp.security_kb_server import main as serve_main
+    _sys.argv = argv
+    serve_main()
 
 
 if __name__ == "__main__":

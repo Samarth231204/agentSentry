@@ -1,0 +1,34 @@
+# Semgrep rules for side-effect sinks. Used by agentguard.mcp.semgrep through the
+# official Semgrep MCP server (semgrep_scan_with_custom_rule). Offline: no registry.
+rules:
+  - id: agentguard.process-exec
+    languages: [python]
+    severity: WARNING
+    message: process execution (side effect)
+    pattern-either:
+      - pattern: os.system(...)
+      - pattern: subprocess.$F(...)
+  - id: agentguard.file-delete
+    languages: [python]
+    severity: WARNING
+    message: file or directory deletion (side effect)
+    pattern-either:
+      - pattern: os.remove(...)
+      - pattern: os.unlink(...)
+      - pattern: shutil.rmtree(...)
+  - id: agentguard.http-write
+    languages: [python]
+    severity: WARNING
+    message: outbound write request (side effect)
+    pattern-either:
+      - pattern: requests.post(...)
+      - pattern: requests.put(...)
+      - pattern: requests.delete(...)
+      - pattern: httpx.post(...)
+      - pattern: httpx.put(...)
+      - pattern: httpx.delete(...)
+  - id: agentguard.smtp-send
+    languages: [python]
+    severity: WARNING
+    message: email send (outbound side effect)
+    pattern: smtplib.SMTP(...)

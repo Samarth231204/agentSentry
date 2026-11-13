@@ -24,7 +24,7 @@ load_env()
 logger = get_logger("reporters")
 
 from crewai import Agent, Crew, Process, Task, LLM  # noqa: E402
-from crewai.mcp.config import MCPServerStdio  # noqa: E402
+from crewai.mcp.config import MCPServerHTTP, MCPServerStdio  # noqa: E402
 
 from agentguard.manifest import Manifest  # noqa: E402
 import crewai.llms.cache as _crewai_cache_mod  # noqa: E402
@@ -205,7 +205,20 @@ def _source_snippets(manifest: Manifest | None, max_chars: Optional[int] = None)
     return "\n\n".join(chunks) if chunks else "(no source files found for declared tools)"
 
 
-def _mcp_servers(project_path: Optional[str | Path]) -> list[MCPServerStdio] | None:
+def _mcp_servers(project_path: Optional[str | Path]):
+    """Our MCP servers over Streamable HTTP when `agentguard up` started them; stdio otherwise."""
+    import os as _os
+    http = []
+    if _os.environ.get("AGENTGUARD_CODEINTEL_URL"):
+        http.append(MCPServerHTTP(url=_os.environ["AGENTGUARD_CODEINTEL_URL"], streamable=True))
+    if _os.environ.get("AGENTGUARD_SECURITY_KB_URL"):
+        http.append(MCPServerHTTP(url=_os.environ["AGENTGUARD_SECURITY_KB_URL"], streamable=True))
+    if http:
+        return http
+    return _mcp_servers_stdio(project_path)
+
+
+def _mcp_servers_stdio(project_path: Optional[str | Path]) -> list[MCPServerStdio] | None:
     if not project_path:
         return None
     repo_root = str(Path(__file__).resolve().parent.parent)
@@ -362,7 +375,7 @@ def build_crew(findings: dict[str, Any], scorecard: dict[str, Any],
             "Never write generic advice like 'improve validation' — if you "
             "can't name something specific because it's not in the source "
             "above, say 'requires manual review of <area>' instead of "
-            f"guessing. Use search_code with repo_path={mcp_repo_path!r} when more context is needed."
+            f"guessing. Use the search_code tool (query=...) when more context is needed."
         ),
         expected_output="A specific, code-level fix for each finding id, keyed by id.",
         agent=engineer,

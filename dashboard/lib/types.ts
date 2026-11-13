@@ -43,8 +43,16 @@ export interface RunSummary {
   warnings: string[];
 }
 
+export interface McpUsage {
+  calls: { server: string; tool: string; count: number }[];
+  total: number;
+  errors: number;
+  unavailable: string[];
+}
+
 export interface RunDetail extends RunSummary {
   llm_usage: BudgetUsage;
+  mcp_usage: McpUsage;
   event_counts: Record<string, number>;
 }
 

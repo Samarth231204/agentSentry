@@ -143,6 +143,7 @@ def create_app(
         return {
             **store.summary(run),
             "llm_usage": store.llm_usage(run),
+            "mcp_usage": store.mcp_usage(run),
             "event_counts": store.event_type_counts(run),
         }
 

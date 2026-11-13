@@ -160,6 +160,44 @@ function Overview({ run }: { run: RunDetail }) {
         )}
       </Panel>
 
+      <Panel title="MCP calls">
+        {run.mcp_usage.total === 0 && run.mcp_usage.unavailable.length === 0 ? (
+          <p className="muted">No MCP calls recorded for this run.</p>
+        ) : (
+          <>
+            {run.mcp_usage.total > 0 ? (
+              <table>
+                <thead>
+                  <tr>
+                    <th>Server</th>
+                    <th>Tool</th>
+                    <th>Calls</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {run.mcp_usage.calls.map((c) => (
+                    <tr key={`${c.server}.${c.tool}`}>
+                      <td className="mono small">{c.server}</td>
+                      <td className="mono small">{c.tool}</td>
+                      <td>{c.count}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : null}
+            <p className="small muted">
+              {run.mcp_usage.errors} error(s). Full request and response previews are in the Trace tab
+              (mcp_tool_call, mcp_tool_result).
+            </p>
+            {run.mcp_usage.unavailable.map((u) => (
+              <div className="banner" key={u}>
+                Not used: {u}
+              </div>
+            ))}
+          </>
+        )}
+      </Panel>
+
       <Panel title="Files in this run">
         <div className="controls small">
           {run.files.map((f) => (

@@ -192,6 +192,28 @@ class RunStore:
                 total[key] += row[key]
         return {"total": total, "by_role": by_role}
 
+    def mcp_usage(self, run: Run) -> dict[str, Any]:
+        """MCP calls per server and tool, from mcp_tool_call / mcp_error trace events."""
+        counts: dict[tuple[str, str], int] = {}
+        errors = 0
+        unavailable: list[str] = []
+        for event in self._all_events(run):
+            kind = event.get("event_type")
+            payload = event.get("payload", {})
+            if kind == "mcp_tool_call":
+                key = (payload.get("server", "?"), payload.get("tool", "?"))
+                counts[key] = counts.get(key, 0) + 1
+            elif kind == "mcp_error":
+                errors += 1
+            elif kind == "mcp_unavailable":
+                unavailable.append(f"{payload.get('server', '?')}: {payload.get('reason', '')}"[:200])
+        return {
+            "calls": [{"server": s, "tool": t, "count": c} for (s, t), c in sorted(counts.items())],
+            "total": sum(counts.values()),
+            "errors": errors,
+            "unavailable": unavailable,
+        }
+
     def event_type_counts(self, run: Run) -> dict[str, int]:
         counts: dict[str, int] = {}
         for event in self._all_events(run):
