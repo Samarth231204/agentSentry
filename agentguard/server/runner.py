@@ -46,7 +46,7 @@ from agentguard.mcp.semgrep import scan_sinks
 from agentguard.logging import get_logger
 from agentguard.manifest import Manifest, synthesize
 from agentguard.reporters import generate_report
-from agentguard.schemas import TraceEvent
+from agentguard.schemas import TargetProfile, TraceEvent
 from agentguard.server import keys as keystore
 from agentguard.server.settings import effective_config
 from agentguard.server.store import make_run_id
@@ -83,6 +83,7 @@ class RunSpec:
     max_tokens: Optional[int] = None
     mock: bool = False
     review_plan: bool = True
+    replay_run_id: Optional[str] = None  # re-send the probes of an earlier run, in order
 
     @property
     def automatic(self) -> bool:
@@ -105,6 +106,8 @@ class RunSpec:
         for name, value in (("max_llm_calls", self.max_llm_calls), ("max_tokens", self.max_tokens)):
             if value is not None and not 1 <= value <= 100_000_000:
                 raise RunRejected(f"{name} is out of range.")
+        if self.replay_run_id is not None and not re.match(r"^[a-z0-9-]{3,80}$", self.replay_run_id):
+            raise RunRejected("replay_run_id is not a valid run id.")
         return self
 
 
@@ -129,6 +132,9 @@ class RunHandle:
     task: Optional[asyncio.Future] = None
     target_proc: Optional[subprocess.Popen] = None
     thread: Optional[threading.Thread] = None
+    budget: Optional[BudgetTracker] = None
+    profile: Optional[Any] = None
+    replay: Optional[dict[str, list[str]]] = None
 
     @property
     def active(self) -> bool:
@@ -267,6 +273,10 @@ class RunManager:
             keystore.apply_to_environ(self.project_root)
             cfg = effective_config(self.project_root)
             set_config(cfg)
+            h.budget = BudgetTracker(BudgetConfig(
+                max_calls_total=h.spec.max_llm_calls, max_tokens_total=h.spec.max_tokens))
+            if h.spec.replay_run_id:
+                h.replay = self._load_replay(h.spec.replay_run_id)
             h.state = "running"
             self._emit("run_started", run_id=h.store_id, mock=h.spec.mock, automatic=h.spec.automatic,
                        target_app=h.spec.target_app, target_url=h.spec.target_url)
@@ -322,7 +332,7 @@ class RunManager:
 
         self._phase(h, "plan", "running")
         ambiguous = [c for c in result.candidates if c.bucket == "ambiguous"]
-        decisions = resolve_ambiguous(ambiguous, cfg.chat_model) if ambiguous else {}
+        decisions = resolve_ambiguous(ambiguous, cfg.chat_model, budget=h.budget) if ambiguous else {}
         plan = build_plan(result, decisions)
         h.plan = plan
         plan.save(h.run_dir / "plan.json")
@@ -341,6 +351,7 @@ class RunManager:
                 raise RuntimeError("plan review timed out")
             plan = h.plan
         self._phase(h, "plan", "done")
+        h.profile = self._profile(plan, result)
 
         self._phase(h, "instrument", "running")
         write_target(h.run_dir, plan, self.project_root)
@@ -377,10 +388,38 @@ class RunManager:
         self._phase(h, "scan", "done")
         return url, manifest
 
+    def _profile(self, plan, result) -> TargetProfile:
+        """What the attacker may know: capabilities and the entrypoint's purpose. Never the system prompt."""
+        entry = plan.entrypoint
+        doc = ""
+        if entry is not None:
+            cand = next((c for c in result.candidates if c.id == entry.candidate_id), None)
+            doc = cand.doc if cand else ""
+        included = [i for i in plan.items if i.include]
+        return TargetProfile(
+            tools=[i.name for i in included if i.role == "watch"],
+            has_rag=any(i.role == "watch_retrieval" for i in included),
+            has_memory=any(i.role == "watch_memory" for i in included),
+            purpose=doc or None,
+            system_prompt_hint=None,
+        )
+
+    def _load_replay(self, run_id: str) -> dict[str, list[str]]:
+        from agentguard.server.store import RunStore
+        store = RunStore(self.project_root)
+        run = store.get(run_id)
+        if run is None or "findings.json" not in run.files and "report.json" not in run.files:
+            raise RuntimeError(f"replay run {run_id} has no findings to replay")
+        replay: dict[str, list[str]] = {}
+        for attempt in store.findings_doc(run).get("attempts", []):
+            for turn in attempt.get("turns", []):
+                if turn.get("sent"):
+                    replay.setdefault(attempt["category"], []).append(turn["sent"])
+        return replay
+
     def _run_attack_and_report(self, h: RunHandle, cfg, url: str, manifest: Manifest) -> None:
         self._phase(h, "attack", "running")
-        budget = BudgetTracker(BudgetConfig(
-            max_calls_total=h.spec.max_llm_calls, max_tokens_total=h.spec.max_tokens))
+        budget = h.budget
         probes = h.spec.max_probes or cfg.max_probes
         sink_obj = self._attack(h, url, manifest, budget, probes)
         findings = {
@@ -414,7 +453,7 @@ class RunManager:
         try:
             task = loop.create_task(run_attack_suite(
                 Target(url), manifest, canaries=h.spec.canaries,
-                max_probes=probes, budget=budget,
+                max_probes=probes, budget=budget, profile=h.profile, replay=h.replay,
             ))
             h.task = task
             if h.cancel_requested:

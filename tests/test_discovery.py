@@ -137,3 +137,18 @@ def test_agent_answers_are_filtered_to_known_ids():
 @pytest.mark.parametrize("answer", ["", "not json", "{}", '{"decisions": "nope"}', '{"decisions": [{"x": 1}]}'])
 def test_malformed_agent_answers_are_ignored(answer):
     assert parse_decisions(answer, {"c-aaaaaaaa"}) == {}
+
+
+def test_a_destructive_name_without_a_sink_is_not_a_candidate(tmp_path):
+    (tmp_path / "helpers.py").write_text(
+        "def update_cache(x):\n    return x\n\ndef send_summary(x):\n    return x\n")
+    result = discover(tmp_path)
+    assert not [c for c in result.candidates if c.name in ("update_cache", "send_summary")]
+
+
+def test_a_destructive_function_with_a_sink_is_reviewed(tmp_path):
+    (tmp_path / "helpers.py").write_text(
+        "import os\n\ndef purge_logs(path):\n    os.system('rm -rf ' + path)\n")
+    result = discover(tmp_path)
+    cand = next(c for c in result.candidates if c.name == "purge_logs")
+    assert cand.bucket == "ambiguous" and cand.destructive

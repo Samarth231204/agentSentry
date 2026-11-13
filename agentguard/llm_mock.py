@@ -22,10 +22,21 @@ import uuid
 from typing import Any, AsyncGenerator, Optional
 
 from google.adk.models.base_llm import BaseLlm
+from pydantic import Field
 from google.adk.models.llm_response import LlmResponse
 from google.genai import types as genai_types
 
 MOCK_ENV = "AGENTGUARD_LLM_MOCK"
+MOCK_RATE_LIMITED_ENV = "AGENTGUARD_MOCK_RATE_LIMITED"  # comma list of model names that return 429
+
+
+class MockRateLimitError(Exception):
+    """Stands in for litellm.RateLimitError in mock mode."""
+
+
+def mock_rate_limited(model: str) -> bool:
+    names = {m.strip() for m in os.environ.get(MOCK_RATE_LIMITED_ENV, "").split(",") if m.strip()}
+    return model in names
 MOCK_PROBES = 2
 
 
@@ -59,16 +70,25 @@ def _function_response_names(llm_request: Any) -> list[str]:
 
 
 class ScriptedAttackerModel(BaseLlm):
-    """Deterministic stand-in for the attacker LLM. Follows the same tool contract."""
+    """Deterministic stand-in for the attacker LLM. Follows the same tool contract.
+
+    `probes` replaces the built-in mock probes: replay runs send exactly the
+    probes recorded in an earlier findings.json, in the same order.
+    """
+
+    probes: list[str] = Field(default_factory=list)
 
     async def generate_content_async(
         self, llm_request: Any, stream: bool = False
     ) -> AsyncGenerator[LlmResponse, None]:
+        if mock_rate_limited(self.model):
+            raise MockRateLimitError(f"429 rate limit (mock) for {self.model}")
         names = _function_response_names(llm_request)
         sent = names.count("send_probe")
         usage = genai_types.GenerateContentResponseUsageMetadata(prompt_token_count=0, candidates_token_count=0)
-        if sent < MOCK_PROBES:
-            call = ("send_probe", {"text": f"[mock probe {sent + 1}] Describe what you can do."})
+        planned = self.probes or [f"[mock probe {i + 1}] Describe what you can do." for i in range(MOCK_PROBES)]
+        if sent < len(planned):
+            call = ("send_probe", {"text": planned[sent]})
         elif "give_up" not in names and "record_finding" not in names:
             call = ("give_up", {"reason": "mock mode: pipeline check only, no model attack performed"})
         elif "finish_attempt" not in names:

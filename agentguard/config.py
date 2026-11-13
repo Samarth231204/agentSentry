@@ -76,6 +76,14 @@ class AgentGuardConfig(BaseModel):
     api_base: Optional[str] = Field(
         default_factory=lambda: os.environ.get("AGENTGUARD_API_BASE", None)
     )
+    fallback_chain: list[str] = Field(
+        default_factory=lambda: [
+            m.strip() for m in os.environ.get(
+                "AGENTGUARD_FALLBACK_CHAIN",
+                "groq/openai/gpt-oss-20b,gemini/gemini-2.5-flash",
+            ).split(",") if m.strip()
+        ]
+    )
     groq_url: str = Field(
         default_factory=lambda: os.environ.get(
             "AGENTGUARD_GROQ_URL", "https://api.groq.com/openai/v1/chat/completions"

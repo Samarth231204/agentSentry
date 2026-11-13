@@ -37,6 +37,9 @@ class OracleType(str, Enum):
     SIDE_EFFECT = "side_effect"
     LLM_JUDGE = "llm_judge"
     MANIFEST_DIFF = "manifest_diff"
+    PII = "pii"
+    FINGERPRINT = "fingerprint"
+    RETRIEVAL_INJECTION = "retrieval_injection"
 
 
 class AttemptStatus(str, Enum):

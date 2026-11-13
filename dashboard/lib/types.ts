@@ -123,6 +123,7 @@ export interface SettingsValues {
   attacker_model: string;
   reporter_model: string;
   chat_model: string;
+  fallback_chain: string[];
   max_probes: number;
   category_cooldown_seconds: number;
   target_timeout: number;

@@ -480,23 +480,39 @@ def generate_report(findings_path: str | Path, report_path: str | Path,
         report = _enrich_report(report, manifest, resolved_proj_path)
         return _write_report(report, report_path)
 
-    crew = build_crew(findings, scorecard, manifest, model=model, project_path=resolved_proj_path)
+    from agentguard.config import get_config, normalize_model
+    cfg = get_config()
+    primary = normalize_model(model or cfg.reporter_model)
+    chain = [primary] + [normalize_model(m) for m in cfg.fallback_chain if normalize_model(m) != primary]
 
     last_error: Exception | None = None
     result = None
-    for attempt in range(4):
-        try:
-            logger.info("Running CrewAI reporting tasks (attempt %d/4)...", attempt + 1)
-            result = crew.kickoff()
-            break
-        except Exception as e:  # noqa: BLE001
-            last_error = e
-            if "rate_limit" not in str(e).lower() and "RateLimitError" not in type(e).__name__:
-                logger.error("CrewAI kickoff failed with non-rate-limit error: %s", e)
+    for index, candidate in enumerate(chain):
+        crew = build_crew(findings, scorecard, manifest, model=candidate, project_path=resolved_proj_path)
+        for attempt in range(4):
+            try:
+                logger.info("Running CrewAI reporting tasks with %s (attempt %d/4)...", candidate, attempt + 1)
+                result = crew.kickoff()
                 break
-            sleep_duration = 25 * (attempt + 1)
-            logger.warning("CrewAI hit rate limit, waiting %ds before retry (%s)", sleep_duration, e)
-            time.sleep(sleep_duration)
+            except Exception as e:  # noqa: BLE001
+                last_error = e
+                if "rate_limit" not in str(e).lower() and "RateLimitError" not in type(e).__name__:
+                    logger.error("CrewAI kickoff failed with non-rate-limit error: %s", e)
+                    break
+                if attempt == 3:
+                    break  # this model is still throttled: move to the next one in the chain
+                sleep_duration = 25 * (attempt + 1)
+                logger.warning("CrewAI hit rate limit, waiting %ds before retry (%s)", sleep_duration, e)
+                time.sleep(sleep_duration)
+        if result is not None:
+            if index > 0:
+                get_event_bus().emit(TraceEvent(source="reporter", event_type="model_fallback", payload={
+                    "role": "reporter", "from": chain[0], "to": candidate, "reason": "fallback after provider error"}))
+            break
+        if index + 1 < len(chain):
+            get_event_bus().emit(TraceEvent(source="reporter", event_type="model_fallback", payload={
+                "role": "reporter", "from": candidate, "to": chain[index + 1],
+                "reason": f"{type(last_error).__name__ if last_error else 'error'}"}))
 
     report: Report | None = None
     if result is not None:

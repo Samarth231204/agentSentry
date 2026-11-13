@@ -21,16 +21,32 @@ ROLES = ("tool", "retrieval", "memory", "llm", "outbound")
 SANDBOX_REPLY = "[AgentGuard sandbox] {name} was recorded but not executed."
 
 
-def _observe(role: str, fn: Callable[..., Any], args: tuple, kwargs: dict, sandboxed: bool) -> None:
-    log = adapter._calls.get()
-    if log is None:
+def record_observation(role: str, name: str, args: dict, result: Any = None) -> None:
+    """Records one observation for the active /invoke request. No-op outside a request."""
+    if adapter._calls.get() is None:
+        return
+    entry: dict[str, Any] = {"name": name, "args": args, "ts": time.time()}
+    if result is not None:
+        entry["result"] = result if isinstance(result, str) else str(result)[:4000]
+    if role == "tool":
+        entry["sandboxed"] = False
+        adapter._calls.get().append(entry)
+    else:
+        adapter._observations.get().setdefault(role, []).append(entry)
+
+
+def _observe(role: str, fn: Callable[..., Any], args: tuple, kwargs: dict, sandboxed: bool,
+             result: Any = None) -> None:
+    if adapter._calls.get() is None:
         return
     bound = adapter._bind(fn, args, kwargs)
     entry = {"name": fn.__name__, "args": bound, "ts": time.time()}
     if role == "tool":
         entry["sandboxed"] = sandboxed
-        log.append(entry)
+        adapter._calls.get().append(entry)
     else:
+        if result is not None:
+            entry["result"] = result if isinstance(result, str) else str(result)[:4000]
         adapter._observations.get().setdefault(role, []).append(entry)
 
 
@@ -51,6 +67,10 @@ def wrap(role: str, sandbox: bool = False) -> Callable[[Callable[..., Any]], Cal
 
         @functools.wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
+            if role == "retrieval":  # the returned documents matter, so record after the call
+                out = fn(*args, **kwargs)
+                _observe(role, fn, args, kwargs, sandbox, result=out)
+                return out
             _observe(role, fn, args, kwargs, sandbox)
             if sandbox and role == "tool":
                 return SANDBOX_REPLY.format(name=fn.__name__)

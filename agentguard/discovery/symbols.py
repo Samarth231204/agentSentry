@@ -70,6 +70,7 @@ class FunctionInfo:
     sql_write: bool = False
     outbound_calls: list[str] = field(default_factory=list)
     is_method: bool = False
+    doc: str = ""  # first line of the docstring, if any
 
 
 @dataclass
@@ -179,7 +180,13 @@ def _function_info(node: ast.AST, qualname: str, is_method: bool) -> FunctionInf
         sql_write=sql_write,
         outbound_calls=sorted(set(outbound)),
         is_method=is_method,
+        doc=_first_doc_line(node),
     )
+
+
+def _first_doc_line(node: ast.AST) -> str:
+    doc = ast.get_docstring(node) or ""
+    return doc.strip().splitlines()[0][:200] if doc.strip() else ""
 
 
 def analyse_source(source: str, rel_path: str) -> FileInfo:

@@ -19,6 +19,7 @@ export default function NewRunPage() {
   const [maxCalls, setMaxCalls] = useState("");
   const [maxTokens, setMaxTokens] = useState("");
   const [mock, setMock] = useState(false);
+  const [replayRunId, setReplayRunId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -37,6 +38,7 @@ export default function NewRunPage() {
       max_llm_calls: optionalInt(maxCalls),
       max_tokens: optionalInt(maxTokens),
       mock,
+      replay_run_id: replayRunId.trim() || undefined,
     };
     try {
       const status = await postJSON<RunStatus>("/api/runs", body);
@@ -103,6 +105,13 @@ export default function NewRunPage() {
         </Panel>
 
         <Panel title="Options">
+          <label className="small" style={{ display: "block", marginBottom: 10 }}>
+            Replay the probes of an earlier run (run id, optional). The attacker sends the same probes in the same
+            order and makes no model calls for the attack.
+            <br />
+            <input type="text" value={replayRunId} onChange={(e) => setReplayRunId(e.target.value)}
+              placeholder="e.g. run-20261113-170057-8948-a1e99a8d" style={{ width: 360, maxWidth: "100%" }} />
+          </label>
           <label className="small" style={{ display: "block", marginBottom: 10 }}>
             <input type="checkbox" checked={reviewPlan} onChange={(e) => setReviewPlan(e.target.checked)} disabled={mode !== "auto"} />{" "}
             Review the plan before the attack starts (recommended)

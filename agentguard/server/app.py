@@ -83,6 +83,7 @@ class RunIn(BaseModel):
     max_tokens: Optional[int] = Field(default=None, ge=1, le=100000000)
     mock: bool = False
     review_plan: bool = True
+    replay_run_id: Optional[str] = Field(default=None, max_length=80)
 
 
 class PlanEditIn(BaseModel):
@@ -264,6 +265,7 @@ def create_app(
             max_tokens=body.max_tokens,
             mock=body.mock,
             review_plan=body.review_plan,
+            replay_run_id=body.replay_run_id or None,
         )
         try:
             handle = manager.start(spec)

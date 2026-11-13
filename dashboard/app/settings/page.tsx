@@ -122,6 +122,19 @@ export default function SettingsPage() {
           Any LiteLLM model string. Use the same model across roles unless you know why not. Changing these does not
           affect a run that is already in progress.
         </p>
+        <label className="small" style={{ display: "block", marginBottom: 10 }}>
+          fallback chain
+          <br />
+          <input
+            type="text"
+            value={draft.fallback_chain.join(", ")}
+            onChange={(e) =>
+              update("fallback_chain", e.target.value.split(",").map((m) => m.trim()).filter(Boolean))
+            }
+            style={{ width: 360, maxWidth: "100%" }}
+          />
+          <span className="muted"> tried in order when a provider is rate-limited</span>
+        </label>
         {(["attacker_model", "reporter_model", "chat_model"] as const).map((key) => (
           <label className="small" key={key} style={{ display: "block", marginBottom: 10 }}>
             {key.replace(/_/g, " ")}

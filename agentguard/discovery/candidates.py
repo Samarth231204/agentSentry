@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+from agentguard.events import get_event_bus
+from agentguard.schemas import TraceEvent
 from agentguard.discovery.symbols import (
     EXPOSE_DECORATOR, FileInfo, FunctionInfo, MEMORY_CALLS, RETRIEVAL_CALLS, TOOL_DECORATORS,
 )
@@ -48,6 +50,7 @@ class Candidate:
     destructive: bool = False
     is_method: bool = False
     snippet: str = ""
+    doc: str = ""
 
     @property
     def bucket(self) -> str:
@@ -131,7 +134,10 @@ def _candidates_for(info: FileInfo, fn: FunctionInfo) -> list[tuple[str, float, 
     elif destructive and fn.name in info.value_refs:
         out.append(("watch", 0.8, ["registered as a value (tool table or dict)"] + d_signals, True))
     elif destructive and not (entry and entry[0] >= AUTO):
-        out.append(("watch", 0.6, d_signals, True))
+        # A destructive-sounding name alone is weak evidence (update, send, write are common helpers).
+        # A real sink or SQL write makes it worth a review; a name by itself is dropped.
+        has_sink = bool(fn.sink_calls or fn.sql_write)
+        out.append(("watch", 0.6 if has_sink else 0.35, d_signals, True))
 
     if any(h in fn.name.lower() for h in RETRIEVAL_HINTS) or any(_last(c) in RETRIEVAL_CALLS for c in fn.calls):
         has_rag = "rag" in info.frameworks
@@ -166,7 +172,11 @@ def discover(project_root: Path, cache_dir: Optional[Path] = None,
     result = DiscoveryResult(root=str(root))
     frameworks: set[str] = set()
     file_infos: dict[str, FileInfo] = {}
-    for path in iter_python_files(root):
+    paths = list(iter_python_files(root))
+    for index, path in enumerate(paths):
+        if index and index % 100 == 0:
+            get_event_bus().emit(TraceEvent(source="discovery", event_type="discovery_progress",
+                                            payload={"done": index, "total": len(paths)}))
         result.files_scanned += 1
         try:
             info = analyse_file(path, root, cache_dir)
@@ -196,6 +206,7 @@ def discover(project_root: Path, cache_dir: Optional[Path] = None,
                     destructive=destructive,
                     is_method=fn.is_method,
                     snippet=_snippet(path, fn.lineno, fn.end_lineno),
+                    doc=fn.doc,
                 ))
     result.frameworks = sorted(frameworks)
     if enrich is not None:
@@ -239,7 +250,7 @@ def _apply_sink_findings(result: DiscoveryResult, file_infos: dict[str, FileInfo
             module=info.module, qualname=fn.qualname, name=_last(fn.qualname),
             line=fn.lineno, end_line=fn.end_lineno, confidence=0.85,
             signals=[note], destructive=True, is_method=fn.is_method,
-            snippet=_snippet(root_path(result) / info.path, fn.lineno, fn.end_lineno),
+            snippet=_snippet(root_path(result) / info.path, fn.lineno, fn.end_lineno), doc=fn.doc,
         )
         result.candidates.append(cand)
         by_key[(info.path, fn.qualname, role)] = cand

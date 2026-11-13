@@ -30,6 +30,30 @@ logger = get_logger("llm")
 litellm.suppress_debug_info = True
 
 
+RETRYABLE_ERRORS = (
+    litellm.RateLimitError,
+    litellm.ServiceUnavailableError,
+    litellm.InternalServerError,
+    litellm.Timeout,
+    litellm.APIConnectionError,
+)
+
+
+def _record_llm_call(messages: list[dict], role: str) -> None:
+    """Target-side monitoring: when a target calls agentguard.llm.chat inside /invoke, keep the messages."""
+    from agentguard.instrument.wrappers import record_observation
+    safe = [{"role": str(m.get("role", "")), "content": str(m.get("content", ""))[:4000]}
+            for m in messages if isinstance(m, dict)]
+    record_observation("llm", "chat", {"messages": safe, "role": role})
+
+
+def _emit_fallback(role: str, from_model: str, to_model: str, reason: str) -> None:
+    from agentguard.events import get_event_bus
+    from agentguard.schemas import TraceEvent
+    get_event_bus().emit(TraceEvent(source="llm", event_type="model_fallback", payload={
+        "role": role, "from": from_model, "to": to_model, "reason": reason}))
+
+
 def _is_retryable_error(exc: BaseException) -> bool:
     """Check if exception is a transient HTTP/network or rate limit error."""
     err_str = str(exc).lower()
@@ -64,6 +88,7 @@ def chat(
     budget: Optional["BudgetTracker"] = None,
     role: str = "unspecified",
 ) -> dict[str, Any]:
+    _record_llm_call(messages, role)
     if mock_enabled():
         if budget is not None:
             budget.record(role=role, prompt_tokens=0, completion_tokens=0)
@@ -86,8 +111,24 @@ def chat(
     if api_base or config.api_base:
         call_kwargs["api_base"] = api_base or config.api_base
 
+    chain = [target_model]
+    if model is None:  # only the default model falls back; an explicit model is respected
+        chain += [normalize_model(m) for m in config.fallback_chain if normalize_model(m) != target_model]
+    resp = None
+    for index, candidate in enumerate(chain):
+        try:
+            resp = _completion_with_retry(model=candidate, messages=messages, **call_kwargs)
+            target_model = candidate
+            if index > 0:
+                _emit_fallback(role, chain[0], candidate, "fallback after provider error")
+            break
+        except RETRYABLE_ERRORS as exc:
+            if index == len(chain) - 1:
+                raise
+            _emit_fallback(role, candidate, chain[index + 1], f"{type(exc).__name__}")
+            continue
+
     try:
-        resp = _completion_with_retry(model=target_model, messages=messages, **call_kwargs)
 
         choice = resp.choices[0]
         msg = choice.message

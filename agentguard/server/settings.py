@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from agentguard.config import AgentGuardConfig
 
@@ -21,8 +21,17 @@ class SettingsIn(BaseModel):
     max_probes: int = Field(ge=1, le=50)
     category_cooldown_seconds: float = Field(ge=0, le=300)
     target_timeout: float = Field(ge=5, le=600)
+    fallback_chain: list[str] = Field(default_factory=list, max_length=4)
     max_llm_calls: Optional[int] = Field(default=None, ge=1, le=100000)
     max_tokens: Optional[int] = Field(default=None, ge=1, le=100000000)
+
+    @field_validator("fallback_chain")
+    @classmethod
+    def _check_chain(cls, models: list[str]) -> list[str]:
+        for model in models:
+            if not _MODEL_RE.match(model):
+                raise ValueError(f"invalid model name in fallback chain: {model!r}")
+        return models
 
 
 def config_path(project_root: Path) -> Path:
@@ -51,6 +60,10 @@ def write_settings(project_root: Path, settings: SettingsIn) -> dict[str, Any]:
 def effective_config(project_root: Path) -> AgentGuardConfig:
     """Defaults < environment < .agentguard/config.yaml (the file wins for editable fields)."""
     saved = {k: v for k, v in read_settings(project_root).items() if k in SettingsIn.model_fields and v is not None}
+    for name in saved.get("fallback_chain", []) or []:
+        if not _MODEL_RE.match(str(name)):
+            saved["fallback_chain"] = [m for m in saved["fallback_chain"] if _MODEL_RE.match(str(m))]
+            break
     return AgentGuardConfig.load(overrides=saved)
 
 
@@ -64,6 +77,7 @@ def current_settings(project_root: Path) -> dict[str, Any]:
         "max_probes": cfg.max_probes,
         "category_cooldown_seconds": cfg.category_cooldown_seconds,
         "target_timeout": cfg.target_timeout,
+        "fallback_chain": cfg.fallback_chain,
         "max_llm_calls": saved.get("max_llm_calls"),
         "max_tokens": saved.get("max_tokens"),
         "saved_to_file": config_path(project_root).exists(),

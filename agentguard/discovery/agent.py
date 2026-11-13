@@ -39,6 +39,7 @@ INSTRUCTION = (
 )
 
 _ID_RE = re.compile(r"^c-[0-9a-f]{8}$")
+MAX_AGENT_CANDIDATES = 40  # the agent reviews the most confident ambiguous candidates; the rest stay unreviewed
 
 
 class AgentDecision(BaseModel):
@@ -85,7 +86,22 @@ def parse_decisions(text: str, known_ids: set[str]) -> dict[str, AgentDecision]:
     return out
 
 
-async def _run_agent(candidates: list[Candidate], model_name: str) -> str:
+def _budget_callback(budget):
+    """Charges each discovery model call to the run budget. A raised BudgetExceededError ends the agent call."""
+    def after_model(callback_context, llm_response):
+        if budget is None:
+            return None
+        usage = getattr(llm_response, "usage_metadata", None)
+        budget.record(
+            role="discovery",
+            prompt_tokens=int(getattr(usage, "prompt_token_count", 0) or 0),
+            completion_tokens=int(getattr(usage, "candidates_token_count", 0) or 0),
+        )
+        return None
+    return after_model
+
+
+async def _run_agent(candidates: list[Candidate], model_name: str, budget=None) -> str:
     import os
     model = ScriptedDiscoveryModel(model="mock") if mock_enabled() else None
     if model is None:
@@ -99,7 +115,8 @@ async def _run_agent(candidates: list[Candidate], model_name: str) -> str:
             connection_params=StreamableHTTPConnectionParams(url=url),
             tool_filter=["read_span", "callers", "callees", "get_symbol"],
         ))
-    agent = LlmAgent(name="discovery", model=model, instruction=INSTRUCTION, tools=tools)
+    agent = LlmAgent(name="discovery", model=model, instruction=INSTRUCTION, tools=tools,
+                     after_model_callback=_budget_callback(budget))
     sessions = InMemorySessionService()
     session = await sessions.create_session(app_name="agentguard", user_id="ag")
     runner = Runner(agent=agent, app_name="agentguard", session_service=sessions)
@@ -111,12 +128,14 @@ async def _run_agent(candidates: list[Candidate], model_name: str) -> str:
     return final
 
 
-def resolve_ambiguous(candidates: list[Candidate], model_name: str) -> dict[str, tuple[bool, Optional[bool], str]]:
+def resolve_ambiguous(candidates: list[Candidate], model_name: str,
+                      budget=None) -> dict[str, tuple[bool, Optional[bool], str]]:
     """Returns {candidate_id: (include, sandbox, reason)}. Empty dict on any failure."""
     if not candidates:
         return {}
+    ranked = sorted(candidates, key=lambda c: (-c.confidence, c.file, c.line))[:MAX_AGENT_CANDIDATES]
     try:
-        text = asyncio.run(_run_agent(candidates, model_name))
+        text = asyncio.run(_run_agent(ranked, model_name, budget))
     except Exception as exc:  # noqa: BLE001 - the deterministic plan still stands
         logger.warning("Discovery agent failed, using deterministic plan only: %s", exc)
         return {}
