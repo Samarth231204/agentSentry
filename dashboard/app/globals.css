@@ -47,6 +47,18 @@ a:hover { text-decoration: underline; }
   position: sticky; top: 0; z-index: 1;
 }
 .brand { font-weight: 700; font-size: 17px; color: var(--text); }
+.topnav { display: flex; gap: 14px; flex-wrap: wrap; font-size: 14px; margin-left: auto; }
+.topnav a { color: var(--muted); }
+.topnav a:hover { color: var(--text); }
+
+.phase {
+  display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 13px;
+  border: 1px solid var(--border); color: var(--muted);
+}
+.phase.running { color: var(--accent); border-color: var(--accent); }
+.phase.done { color: var(--confirmed); border-color: var(--confirmed); }
+.phase.failed { color: var(--error); border-color: var(--error); }
+.phase.cancelled { color: var(--suspected); border-color: var(--suspected); }
 
 .container { max-width: 1200px; margin: 0 auto; padding: 20px 16px 48px; }
 

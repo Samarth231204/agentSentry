@@ -110,3 +110,48 @@ export interface ProjectInfo {
   run_count: number;
   run_dirs: string[];
 }
+
+export interface SettingsValues {
+  attacker_model: string;
+  reporter_model: string;
+  chat_model: string;
+  max_probes: number;
+  category_cooldown_seconds: number;
+  target_timeout: number;
+  max_llm_calls: number | null;
+  max_tokens: number | null;
+  saved_to_file: boolean;
+}
+
+export interface ProviderStatus {
+  id: string;
+  label: string;
+  configured: boolean;
+  masked: string | null;
+}
+
+export interface SettingsResponse {
+  settings: SettingsValues;
+  providers: ProviderStatus[];
+}
+
+export interface KeyTestResult {
+  ok: boolean;
+  model: string;
+  message: string;
+}
+
+export type RunState = "queued" | "running" | "done" | "failed" | "cancelled";
+
+export interface RunStatus {
+  run_id: string;
+  state: RunState;
+  phase: string | null;
+  phases: Record<string, string>;
+  error: string | null;
+  started: number;
+  finished: number | null;
+  target_url: string | null;
+  cancel_requested: boolean;
+  mock: boolean;
+}

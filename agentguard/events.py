@@ -27,6 +27,11 @@ class EventBus:
         with self._lock:
             self._subscribers.append(fn)
 
+    def unsubscribe(self, fn: Subscriber) -> None:
+        with self._lock:
+            if fn in self._subscribers:
+                self._subscribers.remove(fn)
+
     def emit(self, event: TraceEvent) -> None:
         with self._lock:
             subs = list(self._subscribers)

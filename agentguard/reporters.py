@@ -16,6 +16,7 @@ from typing import Any, Optional
 from agentguard._env import load_env
 from agentguard.config import get_config, normalize_model
 from agentguard.events import get_event_bus
+from agentguard.llm_mock import mock_enabled
 from agentguard.logging import get_logger
 from agentguard.schemas import AttemptStatus, Finding, Report, TraceEvent
 
@@ -78,8 +79,9 @@ def _report_markdown(report: Report) -> str:
     lines = ["# Security Assessment Report", ""]
     if report.generated_by == "deterministic_fallback":
         lines.extend([
-            "> **Generated without an LLM.** The reporter crew failed or returned "
-            "invalid output, so severity and remediation below are rule-based. "
+            "> **Generated without an LLM.** The reporter crew did not run (mock mode, "
+            "or the run asked for no LLM), or it failed or returned invalid output. "
+            "Severity and remediation below are rule-based. "
             "OWASP mappings and code references are deterministic lookups.",
             "",
         ])
@@ -435,10 +437,19 @@ def _deterministic_report_fallback(
     )
 
 
+def _write_report(report: Report, report_path: str | Path) -> str:
+    Path(report_path).with_suffix(".json").write_text(report.model_dump_json(indent=2), encoding="utf-8")
+    report_md = _report_markdown(report)
+    Path(report_path).write_text(report_md, encoding="utf-8")
+    logger.info("Successfully wrote report to %s", report_path)
+    return report_md
+
+
 def generate_report(findings_path: str | Path, report_path: str | Path,
                      manifest_path: str | Path | None = None,
                      model: Optional[str] = None,
-                     project_path: Optional[str | Path] = None) -> str:
+                     project_path: Optional[str | Path] = None,
+                     use_llm: bool = True) -> str:
     """Findings JSON (+ optional manifest for real source) in, report.md out.
     No network access to any target."""
     logger.info("Generating report from %s -> %s", findings_path, report_path)
@@ -450,6 +461,11 @@ def generate_report(findings_path: str | Path, report_path: str | Path,
     resolved_proj_path = project_path
     if not resolved_proj_path and manifest_path:
         resolved_proj_path = Path(manifest_path).resolve().parent
+
+    if not use_llm or mock_enabled():
+        report = _deterministic_report_fallback(findings, scorecard, manifest)
+        report = _enrich_report(report, manifest, resolved_proj_path)
+        return _write_report(report, report_path)
 
     crew = build_crew(findings, scorecard, manifest, model=model, project_path=resolved_proj_path)
 
@@ -509,9 +525,4 @@ def generate_report(findings_path: str | Path, report_path: str | Path,
         report.generated_by = "llm"
 
     report = _enrich_report(report, manifest, resolved_proj_path)
-
-    Path(report_path).with_suffix(".json").write_text(report.model_dump_json(indent=2), encoding="utf-8")
-    report_md = _report_markdown(report)
-    Path(report_path).write_text(report_md, encoding="utf-8")
-    logger.info("Successfully wrote report to %s", report_path)
-    return report_md
+    return _write_report(report, report_path)

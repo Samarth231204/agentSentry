@@ -15,7 +15,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <Link href="/" className="brand">
             AgentGuard
           </Link>
-          <span className="muted small">local dashboard · 127.0.0.1 only</span>
+          <nav className="topnav" aria-label="Main">
+            <Link href="/">Runs</Link>
+            <Link href="/new">New run</Link>
+            <Link href="/settings">Settings</Link>
+            <Link href="/onboarding">Set up key</Link>
+          </nav>
         </header>
         <main className="container">{children}</main>
       </body>

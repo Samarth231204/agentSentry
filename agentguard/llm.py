@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     from agentguard.budget import BudgetTracker
 
 from agentguard._env import load_env
+from agentguard.llm_mock import mock_chat, mock_enabled
 
 load_env()
 
@@ -63,6 +64,11 @@ def chat(
     budget: Optional["BudgetTracker"] = None,
     role: str = "unspecified",
 ) -> dict[str, Any]:
+    if mock_enabled():
+        if budget is not None:
+            budget.record(role=role, prompt_tokens=0, completion_tokens=0)
+        return mock_chat(messages, tools=tools)
+
     raw_model = model or get_config().chat_model
     target_model = normalize_model(raw_model)
     config = get_config()

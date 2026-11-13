@@ -10,6 +10,7 @@ import { Bar, Panel, ErrorBox, Loading, Tile } from "@/components/ui";
 import { FindingsTable } from "@/components/Findings";
 import { TraceView } from "@/components/Trace";
 import { ReportMarkdown } from "@/components/ReportMarkdown";
+import { RunProgress } from "@/components/RunProgress";
 
 const TABS = ["overview", "findings", "report", "trace", "manifest"] as const;
 type Tab = (typeof TABS)[number];
@@ -35,6 +36,8 @@ export function RunView() {
       <p className="small"><Link href="/">← All runs</Link></p>
       <h1>{run.label}</h1>
       <p className="muted small mono">{run.path} · modified {formatTime(run.modified)}</p>
+
+      <RunProgress runId={runId} onFinished={detail.refetch} />
 
       <nav className="tabs" aria-label="Run sections">
         {TABS.map((t) => (

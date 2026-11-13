@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
+from agentguard.llm_mock import ScriptedAttackerModel, mock_enabled
 from agentguard._env import load_env
 from agentguard.config import get_config, normalize_model
 from agentguard.events import get_event_bus
@@ -623,7 +624,8 @@ def make_attacker(category: str, target: Target, sink: FindingsSink,
 
     return LlmAgent(
         name=f"attacker_{category}",
-        model=LiteLlm(model=chosen_model, num_retries=config.litellm_retries),
+        model=(ScriptedAttackerModel(model=chosen_model) if mock_enabled()
+               else LiteLlm(model=chosen_model, num_retries=config.litellm_retries)),
         instruction=instruction,
         tools=[send_probe, record_finding, give_up, finish_attempt],
         before_model_callback=_before_model_callback,

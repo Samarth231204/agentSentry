@@ -25,9 +25,9 @@ export default function RunsPage() {
       {runs.data && runs.data.length === 0 ? (
         <Panel title="No runs yet">
           <p>
-            The dashboard reads results from this project. Create one with the CLI, for example
-            <code> agentguard test</code>, or start the target and run it from the CLI, then reload.
-            Runs in another folder can be shown with <code>agentguard up --run-dir PATH</code>.
+            <Link href="/new">Start a run</Link> from the dashboard, or create one with the CLI (for example
+            <code> agentguard test</code>) and reload. Runs in another folder can be shown with
+            <code> agentguard up --run-dir PATH</code>.
           </p>
         </Panel>
       ) : null}

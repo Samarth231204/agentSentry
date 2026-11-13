@@ -1,17 +1,23 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { getJSON } from "./api";
 
 export interface ApiState<T> {
   data: T | null;
   error: string | null;
   loading: boolean;
+  refetch: () => void;
 }
 
 /** Fetches `path` whenever it changes. `path` null means "do not fetch yet". */
 export function useApi<T>(path: string | null): ApiState<T> {
-  const [state, setState] = useState<ApiState<T>>({ data: null, error: null, loading: path !== null });
+  const [version, setVersion] = useState(0);
+  const [state, setState] = useState<Omit<ApiState<T>, "refetch">>({
+    data: null,
+    error: null,
+    loading: path !== null,
+  });
 
   useEffect(() => {
     if (path === null) {
@@ -26,7 +32,8 @@ export function useApi<T>(path: string | null): ApiState<T> {
     return () => {
       cancelled = true;
     };
-  }, [path]);
+  }, [path, version]);
 
-  return state;
+  const refetch = useCallback(() => setVersion((v) => v + 1), []);
+  return { ...state, refetch };
 }
