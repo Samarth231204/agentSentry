@@ -6,11 +6,12 @@ import { postJSON, ApiError } from "@/lib/api";
 import type { RunStatus } from "@/lib/types";
 import { Panel } from "@/components/ui";
 
-type Mode = "app" | "url";
+type Mode = "auto" | "app" | "url";
 
 export default function NewRunPage() {
   const router = useRouter();
-  const [mode, setMode] = useState<Mode>("app");
+  const [mode, setMode] = useState<Mode>("auto");
+  const [reviewPlan, setReviewPlan] = useState(true);
   const [targetApp, setTargetApp] = useState("app:app");
   const [targetUrl, setTargetUrl] = useState("http://127.0.0.1:8000");
   const [canaries, setCanaries] = useState("");
@@ -30,6 +31,7 @@ export default function NewRunPage() {
     const body = {
       target_app: mode === "app" ? targetApp.trim() : undefined,
       target_url: mode === "url" ? targetUrl.trim() : undefined,
+      review_plan: reviewPlan,
       canaries: canaries.split(/[\n,]/).map((c) => c.trim()).filter(Boolean),
       max_probes: optionalInt(maxProbes),
       max_llm_calls: optionalInt(maxCalls),
@@ -52,14 +54,24 @@ export default function NewRunPage() {
         <Panel title="Target">
           <div className="controls">
             <label className="small">
-              <input type="radio" name="mode" checked={mode === "app"} onChange={() => setMode("app")} /> Start my app
+              <input type="radio" name="mode" checked={mode === "auto"} onChange={() => setMode("auto")} /> Automatic
+              (recommended): find my agent and watch it
+            </label>
+            <label className="small">
+              <input type="radio" name="mode" checked={mode === "app"} onChange={() => setMode("app")} /> Advanced: my
+              ASGI app with @expose
             </label>
             <label className="small">
               <input type="radio" name="mode" checked={mode === "url"} onChange={() => setMode("url")} /> Already running
               (localhost)
             </label>
           </div>
-          {mode === "app" ? (
+          {mode === "auto" ? (
+            <p className="small muted">
+              AgentGuard reads your code (it never runs it), proposes what to watch, and starts your agent with those
+              wrappers applied. Your files are not edited.
+            </p>
+          ) : mode === "app" ? (
             <label className="small" style={{ display: "block" }}>
               ASGI app to start, as <code>module:attribute</code>, relative to the project folder
               <br />
@@ -91,6 +103,10 @@ export default function NewRunPage() {
         </Panel>
 
         <Panel title="Options">
+          <label className="small" style={{ display: "block", marginBottom: 10 }}>
+            <input type="checkbox" checked={reviewPlan} onChange={(e) => setReviewPlan(e.target.checked)} disabled={mode !== "auto"} />{" "}
+            Review the plan before the attack starts (recommended)
+          </label>
           <label className="small" style={{ display: "block", marginBottom: 10 }}>
             Canary strings to look for (comma or new line separated)
             <br />

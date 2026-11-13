@@ -17,6 +17,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+import json
+
 from agentguard import __version__
 from agentguard.server import keys as keystore
 from agentguard.server.runner import RunBusy, RunManager, RunRejected, RunSpec
@@ -80,6 +82,17 @@ class RunIn(BaseModel):
     max_llm_calls: Optional[int] = Field(default=None, ge=1, le=100000)
     max_tokens: Optional[int] = Field(default=None, ge=1, le=100000000)
     mock: bool = False
+    review_plan: bool = True
+
+
+class PlanEditIn(BaseModel):
+    candidate_id: str = Field(max_length=32)
+    include: Optional[bool] = None
+    sandbox: Optional[bool] = None
+
+
+class PlanApproveIn(BaseModel):
+    edits: list[PlanEditIn] = Field(default_factory=list, max_length=500)
 
 
 def _no_store(response: Response) -> None:
@@ -249,6 +262,7 @@ def create_app(
             max_llm_calls=body.max_llm_calls,
             max_tokens=body.max_tokens,
             mock=body.mock,
+            review_plan=body.review_plan,
         )
         try:
             handle = manager.start(spec)
@@ -268,6 +282,35 @@ def create_app(
         handle = manager.get(run_id)
         if handle is None:
             raise HTTPException(status_code=404, detail="No live status for this run (it may predate this server).")
+        return handle.as_dict()
+
+    @app.get("/api/runs/{run_id}/plan")
+    def get_plan(run_id: str) -> dict[str, Any]:
+        handle = manager.get(run_id)
+        plan_file = Path(project_root) / ".agentguard" / "runs" / Path(handle.run_dir).name / "plan.json" \
+            if handle else None
+        if handle is None:
+            run = _require_run(store, run_id)
+            plan_file = run.path / "plan.json"
+            discovery_file = run.path / "discovery.json"
+        else:
+            discovery_file = handle.run_dir / "discovery.json"
+        if not plan_file or not plan_file.exists():
+            raise HTTPException(status_code=404, detail="No plan for this run yet.")
+        plan = json.loads(plan_file.read_text(encoding="utf-8"))
+        candidates = []
+        if discovery_file.exists():
+            candidates = json.loads(discovery_file.read_text(encoding="utf-8")).get("candidates", [])
+        return {"plan": plan, "candidates": candidates}
+
+    @app.post("/api/runs/{run_id}/plan/approve")
+    def approve_plan(run_id: str, body: PlanApproveIn) -> dict[str, Any]:
+        try:
+            handle = manager.approve_plan(run_id, [e.model_dump(exclude_none=True) for e in body.edits])
+        except KeyError:
+            raise HTTPException(status_code=404, detail="No live run with that id.")
+        except (RunRejected, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
         return handle.as_dict()
 
     @app.post("/api/runs/{run_id}/cancel")

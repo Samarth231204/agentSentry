@@ -153,5 +153,41 @@ export interface RunStatus {
   finished: number | null;
   target_url: string | null;
   cancel_requested: boolean;
+  awaiting_plan: boolean;
+  automatic: boolean;
   mock: boolean;
+}
+
+export interface PlanItem {
+  candidate_id: string;
+  role: string;
+  file: string;
+  module: string;
+  qualname: string;
+  name: string;
+  line: number;
+  include: boolean;
+  sandbox: boolean;
+  destructive: boolean;
+  confidence: number;
+  source: "auto" | "agent" | "user" | "default";
+  reason: string;
+}
+
+export interface DiscoveryCandidate {
+  id: string;
+  role: string;
+  file: string;
+  qualname: string;
+  name: string;
+  line: number;
+  confidence: number;
+  signals: string[];
+  destructive: boolean;
+  snippet: string;
+}
+
+export interface PlanResponse {
+  plan: { project_root: string; created: number; items: PlanItem[] };
+  candidates: DiscoveryCandidate[];
 }

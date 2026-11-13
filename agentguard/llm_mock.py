@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from typing import Any, AsyncGenerator, Optional
 
@@ -82,3 +83,27 @@ class ScriptedAttackerModel(BaseLlm):
             parts=[genai_types.Part(function_call=genai_types.FunctionCall(
                 id=f"mock-{uuid.uuid4().hex[:8]}", name=call[0], args=call[1]))],
         ), usage_metadata=usage)
+
+
+class ScriptedDiscoveryModel(BaseLlm):
+    """Mock discovery agent: excludes every ambiguous candidate it is shown.
+
+    The mock plan is therefore exactly the deterministic plan, which makes the
+    mock result reproducible and easy to compare against a live run.
+    """
+
+    async def generate_content_async(
+        self, llm_request: Any, stream: bool = False
+    ) -> AsyncGenerator[LlmResponse, None]:
+        text = ""
+        for content in getattr(llm_request, "contents", None) or []:
+            for part in getattr(content, "parts", None) or []:
+                text += getattr(part, "text", None) or ""
+        ids = sorted(set(re.findall(r"c-[0-9a-f]{8}", text)))
+        body = {"decisions": [
+            {"candidate_id": cid, "include": False, "sandbox": None,
+             "reason": "mock mode: ambiguous candidates are not included"}
+            for cid in ids
+        ]}
+        yield LlmResponse(content=genai_types.Content(
+            role="model", parts=[genai_types.Part(text=json.dumps(body))]))

@@ -11,8 +11,9 @@ import { FindingsTable } from "@/components/Findings";
 import { TraceView } from "@/components/Trace";
 import { ReportMarkdown } from "@/components/ReportMarkdown";
 import { RunProgress } from "@/components/RunProgress";
+import { PlanReview } from "@/components/PlanReview";
 
-const TABS = ["overview", "findings", "report", "trace", "manifest"] as const;
+const TABS = ["overview", "plan", "findings", "report", "trace", "manifest"] as const;
 type Tab = (typeof TABS)[number];
 
 export function RunView() {
@@ -53,6 +54,7 @@ export function RunView() {
       </nav>
 
       {tab === "overview" ? <Overview run={run} /> : null}
+      {tab === "plan" ? <PlanReview runId={runId} /> : null}
       {tab === "findings" ? <FindingsPanel runId={runId} /> : null}
       {tab === "report" ? <ReportPanel runId={runId} /> : null}
       {tab === "trace" ? <TraceView runId={runId} /> : null}

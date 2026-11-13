@@ -33,6 +33,7 @@ app = FastAPI(title="agentguard-adapter")
 
 _entrypoint: Optional[Callable[..., Any]] = None
 _calls: contextvars.ContextVar[Optional[list]] = contextvars.ContextVar("calls", default=None)
+_observations: contextvars.ContextVar[dict] = contextvars.ContextVar("observations")
 
 
 class InvokeRequest(BaseModel):
@@ -63,17 +64,9 @@ def expose(fn: Callable[..., Any]) -> Callable[..., Any]:
 
 def watch(fn: Callable[..., Any]) -> Callable[..., Any]:
     """Mark `fn` as observable: each call is recorded on the active request's log."""
+    from agentguard.instrument.wrappers import wrap
 
-    @functools.wraps(fn)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        log = _calls.get()
-        if log is not None:
-            bound_args = _bind(fn, args, kwargs)
-            log.append({"name": fn.__name__, "args": bound_args, "ts": time.time()})
-            logger.debug("Recorded @watch call: %s(%s)", fn.__name__, bound_args)
-        return fn(*args, **kwargs)
-
-    return wrapper
+    return wrap("tool", sandbox=False)(fn)
 
 
 @app.get("/health")
@@ -93,6 +86,7 @@ def invoke(req: InvokeRequest) -> dict:
         }
 
     token = _calls.set([])
+    obs_token = _observations.set({})
     t0 = time.perf_counter()
     output: Any = None
     error: Optional[dict] = None
@@ -107,13 +101,16 @@ def invoke(req: InvokeRequest) -> dict:
         logger.warning("Target entrypoint exception: %s: %s", type(e).__name__, e)
     finally:
         calls = _calls.get() or []
+        observations = _observations.get({})
         _calls.reset(token)
+        _observations.reset(obs_token)
 
     latency_ms = (time.perf_counter() - t0) * 1000
     logger.debug("POST /invoke completed in %.2f ms (tools recorded: %d)", latency_ms, len(calls))
     return {
         "output": output,
         "tool_calls": calls,
+        "observations": observations,
         "error": error,
         "latency_ms": latency_ms,
     }

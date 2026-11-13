@@ -6,8 +6,11 @@ import type { RunStatus } from "@/lib/types";
 import { Panel } from "./ui";
 
 const PHASE_LABELS: Record<string, string> = {
+  discover: "Discover",
+  plan: "Plan",
+  instrument: "Instrument",
   target: "Start target",
-  scan: "Scan project",
+  scan: "Scan",
   attack: "Attack",
   report: "Report",
 };
@@ -78,19 +81,27 @@ export function RunProgress({ runId, onFinished }: { runId: string; onFinished: 
   return (
     <Panel title={active ? "Run in progress" : `Run ${status.state}`}>
       <div className="controls">
-        {Object.entries(PHASE_LABELS).map(([key, label]) => {
-          const state = status.phases[key] ?? "pending";
-          return (
-            <span key={key} className={`phase ${state}`} title={state}>
-              {label}: {state}
-            </span>
-          );
-        })}
+        {Object.entries(PHASE_LABELS)
+          .filter(([key]) => key in status.phases)
+          .map(([key, label]) => {
+            const state = status.phases[key] ?? "pending";
+            return (
+              <span key={key} className={`phase ${state === "awaiting_review" ? "running" : state}`} title={state}>
+                {label}: {state === "awaiting_review" ? "waiting for review" : state}
+              </span>
+            );
+          })}
       </div>
       {status.mock ? (
         <p className="small muted">Mock mode: no provider calls were made, so no result says anything about your app.</p>
       ) : null}
       {status.error ? <div className="banner error">{status.error}</div> : null}
+      {status.awaiting_plan ? (
+        <div className="banner">
+          Waiting for your review. Open the <a href={`?id=${encodeURIComponent(runId)}&tab=plan`}>Plan tab</a> to approve
+          what AgentGuard will watch.
+        </div>
+      ) : null}
       {active ? (
         <div className="controls">
           <button type="button" onClick={cancel} disabled={cancelling || status.cancel_requested}>

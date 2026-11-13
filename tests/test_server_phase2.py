@@ -160,7 +160,6 @@ def test_settings_file_overrides_defaults(project, monkeypatch):
 # ----- run requests -------------------------------------------------------
 
 @pytest.mark.parametrize("spec", [
-    RunSpec(),                                               # neither target
     RunSpec(target_app="app:app", target_url="http://127.0.0.1:9"),  # both
     RunSpec(target_app="import os; os.system('x')"),        # not a module:attr
     RunSpec(target_url="https://example.com"),               # remote host refused
@@ -171,6 +170,11 @@ def test_settings_file_overrides_defaults(project, monkeypatch):
 def test_run_spec_validation_rejects(spec):
     with pytest.raises(RunRejected):
         spec.validate()
+
+
+def test_default_run_is_automatic_and_valid():
+    spec = RunSpec().validate()
+    assert spec.automatic and spec.review_plan
 
 
 def test_run_request_rejected_returns_422(client):
