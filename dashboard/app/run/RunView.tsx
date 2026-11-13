@@ -35,8 +35,12 @@ export function RunView() {
   return (
     <>
       <p className="small"><Link href="/">← All runs</Link></p>
-      <h1>{run.label}</h1>
-      <p className="muted small mono">{run.path} · modified {formatTime(run.modified)}</p>
+      <div className="page-head">
+        <div>
+          <h1>{run.label}</h1>
+          <p className="muted small mono">{run.path} · {formatTime(run.modified)}</p>
+        </div>
+      </div>
 
       <RunProgress runId={runId} onFinished={detail.refetch} />
 
@@ -73,6 +77,11 @@ function Overview({ run }: { run: RunDetail }) {
 
   return (
     <>
+      {run.mock ? (
+        <div className="banner warn">
+          Demo check: no model was called. These numbers prove the pipeline ran, not how secure your agent is.
+        </div>
+      ) : null}
       {warnings.map((w) => (
         <div className="banner" key={w}>
           {w}

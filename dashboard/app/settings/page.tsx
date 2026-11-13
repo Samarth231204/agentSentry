@@ -61,7 +61,7 @@ export default function SettingsPage() {
     step = 1,
     nullable = false,
   ) => (
-    <label className="small" style={{ display: "block", marginBottom: 10 }}>
+    <label className="field" style={{ marginBottom: 14 }}>
       {label}
       <br />
       <input
@@ -77,21 +77,22 @@ export default function SettingsPage() {
         }}
         style={{ width: 200 }}
       />
-      <span className="muted"> {hint}</span>
+      <span className="muted small"> {hint}</span>
     </label>
   );
 
   return (
     <>
       <h1>Settings</h1>
+      <p className="lead">Model keys, models and limits. Changes apply to the next run.</p>
 
       <Panel title="API keys">
         {settings.data.providers.map((p) => (
-          <div key={p.id} style={{ borderBottom: "1px solid var(--border)", padding: "10px 0" }}>
-            <div className="controls" style={{ justifyContent: "space-between" }}>
+          <div key={p.id} className="key-item">
+            <div className="key-row">
               <strong>{p.label}</strong>
-              <span className="mono small">{p.configured ? p.masked : "not set"}</span>
-              <span className="controls" style={{ marginBottom: 0 }}>
+              <span className={`mono small ${p.configured ? "" : "muted"}`}>{p.configured ? p.masked : "not set"}</span>
+              <span className="controls" style={{ marginBottom: 0, justifyContent: "flex-end" }}>
                 <button type="button" onClick={() => setReplacing(replacing === p.id ? null : p.id)}>
                   {p.configured ? "Replace" : "Add"}
                 </button>
@@ -122,7 +123,7 @@ export default function SettingsPage() {
           Any LiteLLM model string. Use the same model across roles unless you know why not. Changing these does not
           affect a run that is already in progress.
         </p>
-        <label className="small" style={{ display: "block", marginBottom: 10 }}>
+        <label className="field" style={{ marginBottom: 14 }}>
           fallback chain
           <br />
           <input
@@ -136,7 +137,7 @@ export default function SettingsPage() {
           <span className="muted"> tried in order when a provider is rate-limited</span>
         </label>
         {(["attacker_model", "reporter_model", "chat_model"] as const).map((key) => (
-          <label className="small" key={key} style={{ display: "block", marginBottom: 10 }}>
+          <label className="field" key={key} style={{ marginBottom: 14 }}>
             {key.replace(/_/g, " ")}
             <br />
             <input

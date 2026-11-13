@@ -86,7 +86,7 @@ export function KeyForm({
           autoCapitalize="off"
           spellCheck={false}
           aria-label={`${label} API key`}
-          style={{ minWidth: 340 }}
+          style={{ flex: "1 1 240px", minWidth: 0, width: "100%", maxWidth: 420 }}
         />
         <button type="button" onClick={test} disabled={busy !== null}>
           {busy === "test" ? "Testing…" : "Test key"}

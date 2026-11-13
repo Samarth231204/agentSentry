@@ -136,6 +136,7 @@ class RunHandle:
     budget: Optional[BudgetTracker] = None
     profile: Optional[Any] = None
     replay: Optional[dict[str, list[str]]] = None
+    progress: dict[str, Any] = field(default_factory=dict)  # live detail for the current phase
 
     @property
     def active(self) -> bool:
@@ -156,6 +157,7 @@ class RunHandle:
             "automatic": self.spec.automatic,
             "transport": "a2a" if self.spec.use_a2a else "in_process",
             "mock": self.spec.mock,
+            "progress": dict(self.progress),
         }
 
 
@@ -259,9 +261,25 @@ class RunManager:
     def _emit(self, event_type: str, **payload: Any) -> None:
         get_event_bus().emit(TraceEvent(source="runner", event_type=event_type, payload=payload))
 
+    def _track_progress(self, h: RunHandle, event: Any) -> None:
+        """Keeps the live detail (attack category, attempts so far) that the status endpoint reports."""
+        if getattr(event, "event_type", None) == "attack_progress":
+            payload = dict(event.payload)
+            h.progress = {
+                "attack": {
+                    "category": payload.get("category"),
+                    "index": payload.get("index"),
+                    "total": payload.get("total"),
+                    "state": payload.get("state"),
+                    "attempts_so_far": payload.get("attempts_so_far"),
+                }
+            }
+
     def _phase(self, h: RunHandle, phase: str, state: str) -> None:
         h.phase = phase
         h.phases[phase] = state
+        if state in ("done", "failed", "cancelled", "skipped"):
+            h.progress = {}
         self._emit("run_phase", phase=phase, state=state)
 
     def _redact(self, text: str) -> str:
@@ -276,6 +294,8 @@ class RunManager:
         bus = get_event_bus()
         sink = JSONLFileSink(h.run_dir / "trace.jsonl")
         bus.subscribe(sink)
+        progress_sink = lambda event: self._track_progress(h, event)  # noqa: E731
+        bus.subscribe(progress_sink)
         prior_mock = os.environ.get(MOCK_ENV)
         if h.spec.mock:
             os.environ[MOCK_ENV] = "1"
@@ -314,6 +334,8 @@ class RunManager:
             h.finished = time.time()
             self._emit("run_finished", run_id=h.store_id, state=h.state, error=h.error)
             bus.unsubscribe(sink)
+            bus.unsubscribe(progress_sink)
+            h.progress = {}
             if h.spec.mock:
                 if prior_mock is None:
                     os.environ.pop(MOCK_ENV, None)

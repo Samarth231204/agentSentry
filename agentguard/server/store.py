@@ -246,8 +246,23 @@ class RunStore:
             "has_manifest": "manifest.yaml" in run.files,
             "has_report": "report.md" in run.files or "report.json" in run.files,
             "has_trace": "trace.jsonl" in run.files,
+            "mock": self.is_mock(run),
             "warnings": self.warnings(run, findings, scorecard),
         }
+
+    def is_mock(self, run: Run) -> bool:
+        """True when the run was a demo check (no model calls), read from its run_started trace event."""
+        trace = run.path / "trace.jsonl"
+        if not trace.is_file():
+            return False
+        try:
+            with trace.open(encoding="utf-8") as fh:
+                for _, line in zip(range(50), fh):
+                    if '"run_started"' in line:
+                        return bool(json.loads(line).get("payload", {}).get("mock"))
+        except (OSError, ValueError):
+            return False
+        return False
 
     def warnings(self, run: Run, findings: list[dict], scorecard: dict) -> list[str]:
         """Problems a user should see on the dashboard. Nothing here is fatal."""

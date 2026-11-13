@@ -28,6 +28,7 @@ export interface BudgetUsage {
 export interface RunSummary {
   id: string;
   label: string;
+  mock: boolean;
   source: "agentguard_runs" | "project_root" | "run_dir";
   path: string;
   modified: number;
@@ -166,6 +167,15 @@ export interface RunStatus {
   automatic: boolean;
   transport: "a2a" | "in_process";
   mock: boolean;
+  progress?: {
+    attack?: {
+      category: string | null;
+      index: number | null;
+      total: number | null;
+      state: string | null;
+      attempts_so_far: number | null;
+    };
+  };
 }
 
 export interface PlanItem {

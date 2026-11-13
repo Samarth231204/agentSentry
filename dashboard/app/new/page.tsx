@@ -1,15 +1,29 @@
 "use client";
 
-import { FormEvent, useState } from "react";
-import { useRouter } from "next/navigation";
+import { FormEvent, Suspense, useEffect, useState } from "react";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { postJSON, ApiError } from "@/lib/api";
-import type { RunStatus } from "@/lib/types";
-import { Panel } from "@/components/ui";
+import { useApi } from "@/lib/useApi";
+import type { RunStatus, SettingsResponse } from "@/lib/types";
+import { ErrorBox, Loading } from "@/components/ui";
 
 type Mode = "auto" | "app" | "url";
 
 export default function NewRunPage() {
+  return (
+    <Suspense fallback={<Loading what="Preparing" />}>
+      <NewRunForm />
+    </Suspense>
+  );
+}
+
+function NewRunForm() {
   const router = useRouter();
+  const params = useSearchParams();
+  const settings = useApi<SettingsResponse>("/api/settings");
+
+  const [demo, setDemo] = useState(false);
   const [mode, setMode] = useState<Mode>("auto");
   const [reviewPlan, setReviewPlan] = useState(true);
   const [targetApp, setTargetApp] = useState("app:app");
@@ -18,16 +32,28 @@ export default function NewRunPage() {
   const [maxProbes, setMaxProbes] = useState("");
   const [maxCalls, setMaxCalls] = useState("");
   const [maxTokens, setMaxTokens] = useState("");
-  const [mock, setMock] = useState(false);
   const [replayRunId, setReplayRunId] = useState("");
   const [useA2a, setUseA2a] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Onboarding links here with ?mock=1 for the demo check.
+  useEffect(() => {
+    if (params.get("mock") === "1") setDemo(true);
+  }, [params]);
+
+  if (settings.loading) return <Loading what="Loading" />;
+  if (settings.error) return <ErrorBox message={`Could not reach the backend: ${settings.error}`} />;
+
+  const hasKey = settings.data?.providers.some((p) => p.configured) ?? false;
   const optionalInt = (value: string) => (value.trim() === "" ? undefined : Number(value));
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (!demo && !hasKey) {
+      setError("Connect a model key first (Get started → Model), or choose the demo check.");
+      return;
+    }
     setBusy(true);
     setError(null);
     const body = {
@@ -38,7 +64,7 @@ export default function NewRunPage() {
       max_probes: optionalInt(maxProbes),
       max_llm_calls: optionalInt(maxCalls),
       max_tokens: optionalInt(maxTokens),
-      mock,
+      mock: demo,
       replay_run_id: replayRunId.trim() || undefined,
       use_a2a: useA2a,
     };
@@ -52,120 +78,120 @@ export default function NewRunPage() {
   }
 
   return (
-    <>
-      <h1>New run</h1>
-      <form onSubmit={submit}>
-        <Panel title="Target">
-          <div className="controls">
-            <label className="small">
-              <input type="radio" name="mode" checked={mode === "auto"} onChange={() => setMode("auto")} /> Automatic
-              (recommended): find my agent and watch it
-            </label>
-            <label className="small">
-              <input type="radio" name="mode" checked={mode === "app"} onChange={() => setMode("app")} /> Advanced: my
-              ASGI app with @expose
-            </label>
-            <label className="small">
-              <input type="radio" name="mode" checked={mode === "url"} onChange={() => setMode("url")} /> Already running
-              (localhost)
-            </label>
-          </div>
-          {mode === "auto" ? (
-            <p className="small muted">
-              AgentGuard reads your code (it never runs it), proposes what to watch, and starts your agent with those
-              wrappers applied. Your files are not edited.
-            </p>
-          ) : mode === "app" ? (
-            <label className="small" style={{ display: "block" }}>
-              ASGI app to start, as <code>module:attribute</code>, relative to the project folder
-              <br />
-              <input
-                type="text"
-                value={targetApp}
-                onChange={(e) => setTargetApp(e.target.value)}
-                style={{ width: 320, maxWidth: "100%" }}
-                aria-label="ASGI app"
-              />
-              <p className="muted small">
-                The app must use <code>@expose</code> on the function that handles user input. Phase 3 will find
-                and wrap it automatically.
-              </p>
-            </label>
-          ) : (
-            <label className="small" style={{ display: "block" }}>
-              URL of the running target (localhost or 127.0.0.1 only)
-              <br />
-              <input
-                type="text"
-                value={targetUrl}
-                onChange={(e) => setTargetUrl(e.target.value)}
-                style={{ width: 320, maxWidth: "100%" }}
-                aria-label="Target URL"
-              />
-            </label>
-          )}
-        </Panel>
-
-        <Panel title="Options">
-          <label className="small" style={{ display: "block", marginBottom: 10 }}>
-            Replay the probes of an earlier run (run id, optional). The attacker sends the same probes in the same
-            order and makes no model calls for the attack.
-            <br />
-            <input type="text" value={replayRunId} onChange={(e) => setReplayRunId(e.target.value)}
-              placeholder="e.g. run-20261113-170057-8948-a1e99a8d" style={{ width: 360, maxWidth: "100%" }} />
-          </label>
-          <label className="small" style={{ display: "block", marginBottom: 10 }}>
-            <input type="checkbox" checked={useA2a} onChange={(e) => setUseA2a(e.target.checked)} />{" "}
-            Run discovery, attacker and reporter as A2A agents (agent cards and JSON-RPC, shown in the trace)
-          </label>
-          <label className="small" style={{ display: "block", marginBottom: 10 }}>
-            <input type="checkbox" checked={reviewPlan} onChange={(e) => setReviewPlan(e.target.checked)} disabled={mode !== "auto"} />{" "}
-            Review the plan before the attack starts (recommended)
-          </label>
-          <label className="small" style={{ display: "block", marginBottom: 10 }}>
-            Canary strings to look for (comma or new line separated)
-            <br />
-            <textarea
-              value={canaries}
-              onChange={(e) => setCanaries(e.target.value)}
-              rows={2}
-              style={{ width: 360, maxWidth: "100%" }}
-            />
-          </label>
-          <div className="controls">
-            <label className="small">
-              Probes per category
-              <br />
-              <input type="number" min={1} max={50} value={maxProbes} onChange={(e) => setMaxProbes(e.target.value)}
-                placeholder="from settings" style={{ width: 150 }} />
-            </label>
-            <label className="small">
-              LLM call limit
-              <br />
-              <input type="number" min={1} value={maxCalls} onChange={(e) => setMaxCalls(e.target.value)}
-                placeholder="no limit" style={{ width: 150 }} />
-            </label>
-            <label className="small">
-              Token limit
-              <br />
-              <input type="number" min={1} value={maxTokens} onChange={(e) => setMaxTokens(e.target.value)}
-                placeholder="no limit" style={{ width: 150 }} />
-            </label>
-          </div>
-          <label className="small" style={{ display: "block", marginTop: 10 }}>
-            <input type="checkbox" checked={mock} onChange={(e) => setMock(e.target.checked)} />{" "}
-            <strong>Mock mode</strong>: no provider calls. Checks that the pipeline runs end to end. It proves nothing
-            about whether your app is vulnerable.
-          </label>
-        </Panel>
-
-        <div className="controls">
-          <button type="submit" disabled={busy}>
-            {busy ? "Starting…" : "Run"}
-          </button>
+    <div className="narrow" style={{ maxWidth: 860 }}>
+      <div className="page-head">
+        <div>
+          <h1>New test</h1>
+          <p className="muted">Choose what to test, then start. You can review the plan before any attack runs.</p>
         </div>
+      </div>
+
+      <form onSubmit={submit} className="stack">
+        <section className="panel">
+          <h2 style={{ marginTop: 0 }}>1. Choose the kind of test</h2>
+          <div className="card-grid" style={{ marginTop: 0 }}>
+            <label className={`card selectable ${!demo ? "selected" : ""} ${!hasKey ? "disabled" : ""}`}>
+              <span className="form-row" style={{ alignItems: "center" }}>
+                <input type="radio" name="kind" checked={!demo} onChange={() => setDemo(false)} />
+                <strong>Real test</strong>
+              </span>
+              <p>Attacks your agent with your connected model. Takes a few minutes.</p>
+              {!hasKey ? <p style={{ color: "var(--error)" }}>Needs a model key. Add one in Settings.</p> : null}
+            </label>
+            <label className={`card selectable ${demo ? "selected" : ""}`}>
+              <span className="form-row" style={{ alignItems: "center" }}>
+                <input type="radio" name="kind" checked={demo} onChange={() => setDemo(true)} />
+                <strong>Demo check</strong>
+              </span>
+              <p>Runs the full pipeline with no model calls, in about 10 seconds. Proves the setup works. Says nothing about security.</p>
+            </label>
+          </div>
+        </section>
+
+        <section className="panel">
+          <h2 style={{ marginTop: 0 }}>2. Your agent</h2>
+          <p className="small muted">
+            AgentGuard reads your project to find the functions that take user input and the tools the agent can
+            call. It starts your agent with those points watched. Your files are not edited.
+          </p>
+          <div className="stack">
+            <label className="check">
+              <input type="checkbox" checked={reviewPlan} onChange={(e) => setReviewPlan(e.target.checked)} />
+              <span>
+                Let me review the plan before attacks start
+                <small>Recommended. You approve or remove each watched function before anything runs.</small>
+              </span>
+            </label>
+          </div>
+        </section>
+
+        <details className="advanced">
+          <summary>Advanced options</summary>
+          <div className="stack">
+            <fieldset style={{ border: "none", padding: 0, margin: 0 }}>
+              <legend className="small muted" style={{ marginBottom: 6 }}>Target</legend>
+              <div className="controls">
+                <label className="small"><input type="radio" name="mode" checked={mode === "auto"} onChange={() => setMode("auto")} /> Automatic (recommended)</label>
+                <label className="small"><input type="radio" name="mode" checked={mode === "app"} onChange={() => setMode("app")} /> My ASGI app with <code>@expose</code></label>
+                <label className="small"><input type="radio" name="mode" checked={mode === "url"} onChange={() => setMode("url")} /> Already running on localhost</label>
+              </div>
+              {mode === "app" ? (
+                <label className="field">
+                  ASGI app as <code>module:attribute</code>, relative to the project
+                  <input type="text" value={targetApp} onChange={(e) => setTargetApp(e.target.value)} aria-label="ASGI app" />
+                </label>
+              ) : null}
+              {mode === "url" ? (
+                <label className="field">
+                  URL of the running agent (localhost or 127.0.0.1 only)
+                  <input type="text" value={targetUrl} onChange={(e) => setTargetUrl(e.target.value)} aria-label="Target URL" />
+                </label>
+              ) : null}
+            </fieldset>
+
+            <label className="field">
+              Canary strings to look for (comma or new line separated)
+              <textarea value={canaries} onChange={(e) => setCanaries(e.target.value)} rows={2} />
+            </label>
+
+            <div className="form-row">
+              <label className="field">
+                Attacks per category
+                <input type="number" min={1} max={50} value={maxProbes} onChange={(e) => setMaxProbes(e.target.value)} placeholder="from settings" style={{ width: 160 }} />
+              </label>
+              <label className="field">
+                Model call limit
+                <input type="number" min={1} value={maxCalls} onChange={(e) => setMaxCalls(e.target.value)} placeholder="no limit" style={{ width: 160 }} />
+              </label>
+              <label className="field">
+                Token limit
+                <input type="number" min={1} value={maxTokens} onChange={(e) => setMaxTokens(e.target.value)} placeholder="no limit" style={{ width: 160 }} />
+              </label>
+            </div>
+
+            <label className="field">
+              Replay the attacks of an earlier run (run id)
+              <input type="text" value={replayRunId} onChange={(e) => setReplayRunId(e.target.value)} placeholder="e.g. run-20261114-120000-ab12" style={{ maxWidth: 380 }} />
+            </label>
+
+            <label className="check">
+              <input type="checkbox" checked={useA2a} onChange={(e) => setUseA2a(e.target.checked)} />
+              <span>
+                Run the steps as A2A agents
+                <small>Agent cards and JSON-RPC calls, shown in the trace. For developers.</small>
+              </span>
+            </label>
+          </div>
+        </details>
+
         {error ? <div className="banner error">{error}</div> : null}
+        <div className="controls">
+          <button type="submit" disabled={busy || (!demo && !hasKey)}>
+            {busy ? "Starting…" : demo ? "Start demo check" : "Start test"}
+          </button>
+          <Link href="/" className="btn secondary">Cancel</Link>
+        </div>
       </form>
-    </>
+    </div>
   );
 }

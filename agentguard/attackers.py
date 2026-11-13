@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from agentguard.llm_fallback import FallbackLlm
+from agentguard.llm_mock import mock_enabled
 from agentguard.probes import seeds_for
 from google.adk.memory import InMemoryMemoryService
 from google.adk.tools import load_memory
@@ -750,9 +751,12 @@ async def run_attack_suite(target: Target, manifest: Manifest,
             ))
             _emit_callback_event("category_skipped", category=category, reason="budget_exhausted")
             continue
-        if i > 0 and config.category_cooldown_seconds > 0:
-            logger.debug("Sleeping for %.1fs between categories for rate limit cooldown", config.category_cooldown_seconds)
-            await asyncio.sleep(config.category_cooldown_seconds)
+        _emit_callback_event("attack_progress", category=category, index=i + 1, total=len(categories),
+                             state="running", attempts_so_far=len(sink.attempts))
+        cooldown = 0.0 if mock_enabled() else config.category_cooldown_seconds
+        if i > 0 and cooldown > 0:
+            logger.debug("Sleeping for %.1fs between categories for rate limit cooldown", cooldown)
+            await asyncio.sleep(cooldown)
         session = await session_service.create_session(
             app_name="agentguard", user_id="ag",
             state=_category_state(profile, sink.attempts),
@@ -787,6 +791,8 @@ async def run_attack_suite(target: Target, manifest: Manifest,
             await memory_service.add_session_to_memory(category_session)
         except Exception as exc:  # noqa: BLE001 - memory is an aid, never a reason to stop the run
             logger.warning("Could not add category session to memory: %s", exc)
+        _emit_callback_event("attack_progress", category=category, index=i + 1, total=len(categories),
+                             state="done", attempts_so_far=len(sink.attempts))
     known_tool_names = {t.name for t in manifest.tools}
     observed = set()
     for attempt in sink.attempts:

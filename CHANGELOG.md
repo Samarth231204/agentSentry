@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **Dashboard redesign**: white and blue theme. Opening the app takes a first-time visitor to a four-step setup guide
+  (welcome, project, model key, first run). `?step=N` keeps the step on reload.
+- **Live progress**: the run page shows each step and the attack category in progress, with attempts so far. The
+  attack phase no longer looks stuck.
+- **Demo check**: a mock run is labelled as a demo in the run list and on the run page, and skips the rate-limit
+  cooldown between attack categories (a demo finishes in seconds instead of about a minute).
+- **New test page**: automatic target and plan review by default; replay, A2A, budgets and canaries are under
+  Advanced options.
+
 ## 0.2.0
 
 Dashboard-first AgentGuard, built in six phases.
