@@ -17,6 +17,12 @@ report.md
 findings.json
 manifest.yaml
 
+# Local dashboard runtime state (keys, runs, cache). Never commit.
+.agentguard/
+
+# Phase plan: kept locally for context, not pushed
+IMPLEMENTATION_PLAN.md
+
 # Secrets
 .env
 .claude/

@@ -198,5 +198,58 @@ def report(project_path: str, findings_path: str, report_out: str,
     click.echo(f"Wrote {report_out} and {Path(report_out).with_suffix('.json')}")
 
 
+@main.command()
+@click.option("--project", "project_path", default=".", show_default="current directory",
+              type=click.Path(exists=True, file_okay=False),
+              help="Project whose runs the dashboard shows (its .agentguard/runs and root outputs).")
+@click.option("--port", default=8787, show_default=True, type=click.IntRange(1, 65535),
+              help="Port for the local backend (bound to 127.0.0.1).")
+@click.option("--dashboard-port", default=3000, show_default=True, type=click.IntRange(1, 65535),
+              help="Port for the dashboard dev server.")
+@click.option("--run-dir", "run_dirs", multiple=True, type=click.Path(exists=True, file_okay=False),
+              help="Extra folder to show as one run (repeatable).")
+@click.option("--no-dashboard", is_flag=True, help="Start only the backend API.")
+@click.option("--no-browser", is_flag=True, help="Do not open the dashboard in a browser.")
+def up(project_path: str, port: int, dashboard_port: int, run_dirs: tuple[str, ...],
+       no_dashboard: bool, no_browser: bool) -> None:
+    """Start the local backend and dashboard, then open the dashboard.
+
+    Serves the API at http://127.0.0.1:PORT and the dashboard at
+    http://localhost:DASHBOARD_PORT. Stop both with Ctrl+C.
+    """
+    import threading
+    import webbrowser
+
+    import uvicorn
+
+    from agentguard.server import launcher
+    from agentguard.server.app import create_app
+
+    backend_url = f"http://127.0.0.1:{port}"
+    dashboard_url = f"http://localhost:{dashboard_port}"
+    app = create_app(
+        Path(project_path),
+        [Path(p) for p in run_dirs],
+        allowed_origins=[f"http://localhost:{dashboard_port}", f"http://127.0.0.1:{dashboard_port}"],
+    )
+
+    dashboard_proc = None
+    if not no_dashboard:
+        ready, reason = launcher.dashboard_status()
+        if ready:
+            dashboard_proc = launcher.start_dashboard(backend_url, dashboard_port)
+            click.echo(f"Dashboard starting at {dashboard_url} ...")
+        else:
+            click.echo(f"Dashboard not started: {reason}. API only.")
+
+    click.echo(f"Backend API at {backend_url}  (project: {Path(project_path).resolve()})")
+    if dashboard_proc is not None and not no_browser:
+        threading.Timer(4.0, webbrowser.open, args=(dashboard_url,)).start()
+    try:
+        uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+    finally:
+        launcher.stop_dashboard(dashboard_proc)
+
+
 if __name__ == "__main__":
     main()
