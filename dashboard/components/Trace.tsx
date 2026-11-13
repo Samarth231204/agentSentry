@@ -8,6 +8,12 @@ import { clock } from "@/lib/format";
 const MAX_EVENTS_IN_VIEW = 5000;
 
 /** Live view of trace.jsonl: replays the file, then follows new lines over SSE. */
+const STREAM_LABEL: Record<"connecting" | "live" | "closed", string> = {
+  connecting: "Connecting…",
+  live: "Live updates",
+  closed: "Finished",
+};
+
 export function TraceView({ runId }: { runId: string }) {
   const [events, setEvents] = useState<TraceEvent[]>([]);
   const [status, setStatus] = useState<"connecting" | "live" | "closed">("connecting");
@@ -66,7 +72,7 @@ export function TraceView({ runId }: { runId: string }) {
     <div>
       <div className="controls">
         <span className="small">
-          Stream: <strong>{status}</strong> · {events.length} events
+          <strong>{STREAM_LABEL[status]}</strong> · {events.length} events
         </span>
         <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} aria-label="Filter by event type">
           <option value="">all event types</option>

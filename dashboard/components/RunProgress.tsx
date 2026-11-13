@@ -27,11 +27,13 @@ export function RunProgress({ runId, onFinished }: { runId: string; onFinished: 
   const [cancelling, setCancelling] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const finishedRef = useRef(false);
+  const sawActiveRef = useRef(false);
   const onFinishedRef = useRef(onFinished);
   onFinishedRef.current = onFinished;
 
   useEffect(() => {
     finishedRef.current = false;
+    sawActiveRef.current = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let cancelled = false;
 
@@ -41,11 +43,14 @@ export function RunProgress({ runId, onFinished }: { runId: string; onFinished: 
         if (cancelled) return;
         setStatus(next);
         if (TERMINAL.has(next.state)) {
-          if (!finishedRef.current) {
+          // Report "finished" only when this view saw the run go from active to finished.
+          // Reporting on mount would reload the page, remount this panel, and loop forever.
+          if (sawActiveRef.current && !finishedRef.current) {
             finishedRef.current = true;
             onFinishedRef.current();
           }
         } else {
+          sawActiveRef.current = true;
           timer = setTimeout(poll, 1000);
         }
       } catch {

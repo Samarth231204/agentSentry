@@ -27,7 +27,7 @@ export function RunView() {
   if (!runId) {
     return <ErrorBox message="No run selected. Go back to the runs list." />;
   }
-  if (detail.loading) return <Loading what="Loading run" />;
+  if (detail.loading && !detail.data) return <Loading what="Loading run" />;
   if (detail.error) return <ErrorBox message={detail.error} />;
   if (!detail.data) return null;
 

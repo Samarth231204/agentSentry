@@ -92,3 +92,17 @@ def test_onboarding_is_not_done_until_completed(tmp_path):
     assert client.post("/api/onboarding/complete").json() == {"done": True}
     assert client.get("/api/onboarding").json() == {"done": True}
     assert (tmp_path / ".agentguard" / "onboarding.json").is_file()
+
+
+def test_run_detail_sees_files_written_after_first_scan(tmp_path):
+    """Regression: the run page showed 'No findings.json' for a run that finished after the list was first read."""
+    project = tmp_path / "project"
+    run_dir = project / ".agentguard" / "runs" / "run-late"
+    run_dir.mkdir(parents=True)
+    (run_dir / "trace.jsonl").write_text("", encoding="utf-8")
+    store = RunStore(project)
+    store.scan()  # the list is read while the run is still running
+    (run_dir / "findings.json").write_text(json.dumps({"attempts": []}), encoding="utf-8")
+    run = store.get(next(r.id for r in store.scan() if r.id.startswith("run-late")))
+    assert "findings.json" in run.files
+    assert store.findings_doc(run)["source"] == "findings.json"

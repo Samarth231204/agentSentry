@@ -88,8 +88,9 @@ class RunStore:
         return sorted(runs.values(), key=lambda r: r.modified, reverse=True)
 
     def get(self, run_id: str) -> Optional[Run]:
-        if run_id not in self._runs:
-            self.scan()
+        # Always rescan: a run's file list changes while it runs (findings.json, report.json appear
+        # at the end), and a cached snapshot would hide the results on the run page.
+        self.scan()
         return self._runs.get(run_id)
 
     # ----- readers (each returns None/empty when the file is absent or broken)
@@ -269,7 +270,7 @@ class RunStore:
         out: list[str] = []
         doc_source = self.findings_doc(run).get("source")
         if doc_source is None:
-            out.append("No findings.json or report.json in this run.")
+            out.append("No results yet. This test did not reach the attack step, or it was cancelled before it finished.")
         if "report.json" in run.files and self.report_json(run) is None:
             out.append("report.json exists but could not be parsed.")
         counted = scorecard.get("total_attempts", 0)

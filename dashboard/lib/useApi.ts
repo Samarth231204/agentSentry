@@ -25,7 +25,8 @@ export function useApi<T>(path: string | null): ApiState<T> {
       return;
     }
     let cancelled = false;
-    setState((s) => ({ ...s, loading: true, error: null }));
+    // Keep the data already on screen while refetching, so panels do not unmount and remount.
+    setState((s) => ({ ...s, loading: s.data === null, error: null }));
     getJSON<T>(path)
       .then((data) => !cancelled && setState({ data, error: null, loading: false }))
       .catch((err: Error) => !cancelled && setState({ data: null, error: err.message, loading: false }));
