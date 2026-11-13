@@ -9,19 +9,20 @@ import { formatTime, pct } from "@/lib/format";
 import { Bar, ErrorBox, Loading, Panel } from "@/components/ui";
 
 /**
- * Home. A first-time visitor (no runs yet and no model key saved) is sent to the
- * onboarding guide. Everyone else sees their runs.
+ * Home. Until the setup guide has been finished or skipped, opening the app goes to
+ * the guide. After that, the page shows the user's runs.
  */
 export default function HomePage() {
   const router = useRouter();
   const settings = useApi<SettingsResponse>("/api/settings");
   const runs = useApi<RunSummary[]>("/api/runs");
   const project = useApi<ProjectInfo>("/api/project");
+  const onboarding = useApi<{ done: boolean }>("/api/onboarding");
 
-  const backendDown = Boolean(settings.error || runs.error);
+  const backendDown = Boolean(settings.error || runs.error || onboarding.error);
   const hasKey = settings.data?.providers.some((p) => p.configured) ?? false;
   const noRuns = runs.data !== null && runs.data.length === 0;
-  const firstVisit = settings.data !== null && runs.data !== null && noRuns && !hasKey;
+  const firstVisit = onboarding.data !== null && !onboarding.data.done;
 
   useEffect(() => {
     if (firstVisit) router.replace("/onboarding");

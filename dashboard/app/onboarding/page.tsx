@@ -1,8 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { Suspense, useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { postJSON } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import type { ProjectInfo, SettingsResponse } from "@/lib/types";
 import { KeyForm } from "@/components/KeyForm";
@@ -20,6 +20,7 @@ export default function OnboardingPage() {
 
 function Onboarding() {
   const params = useSearchParams();
+  const router = useRouter();
   const [step, setStep] = useState(0);
   // Keep the step in the URL so a reload stays on the same step.
   useEffect(() => {
@@ -48,6 +49,15 @@ function Onboarding() {
 
   const configured = settings.data.providers.filter((p) => p.configured);
   const hasKey = configured.length > 0;
+  // Finishing or skipping the guide is recorded in the project, so opening the app goes to the runs next time.
+  async function finish(href: string) {
+    try {
+      await postJSON("/api/onboarding/complete");
+    } catch {
+      // Not fatal: the guide may show once more.
+    }
+    router.push(href);
+  }
   const next = () => setStep((s) => Math.min(s + 1, STEPS.length - 1));
   const back = () => setStep((s) => Math.max(s - 1, 0));
 
@@ -92,6 +102,7 @@ function Onboarding() {
           </div>
           <div className="controls">
             <button type="button" onClick={next}>Get started</button>
+            <button type="button" className="secondary" onClick={() => finish("/")}>Skip setup</button>
           </div>
         </section>
       ) : null}
@@ -148,7 +159,9 @@ function Onboarding() {
                 says nothing about your agent's security.
               </p>
               <div className="controls" style={{ marginTop: 10, marginBottom: 0 }}>
-                <Link href="/new?mock=1" className={hasKey ? "btn secondary" : "btn"}>Start demo check</Link>
+                <button type="button" className={hasKey ? "secondary" : undefined} onClick={() => finish("/new?mock=1")}>
+                  Start demo check
+                </button>
               </div>
             </div>
             <div className={`card ${hasKey ? "" : "disabled"}`}>
@@ -160,7 +173,7 @@ function Onboarding() {
               </p>
               <div className="controls" style={{ marginTop: 10, marginBottom: 0 }}>
                 {hasKey ? (
-                  <Link href="/new" className="btn">Start real test</Link>
+                  <button type="button" onClick={() => finish("/new")}>Start real test</button>
                 ) : (
                   <span className="small muted">Connect a model in the previous step first.</span>
                 )}
@@ -169,7 +182,7 @@ function Onboarding() {
           </div>
           <div className="controls" style={{ marginTop: 10 }}>
             <button type="button" className="secondary" onClick={back}>Back</button>
-            <Link href="/" className="btn secondary">Go to my runs</Link>
+            <button type="button" className="secondary" onClick={() => finish("/")}>Go to my runs</button>
           </div>
         </section>
       ) : null}

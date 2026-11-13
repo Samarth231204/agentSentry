@@ -80,3 +80,15 @@ def test_run_list_does_not_mark_real_runs_as_demo(tmp_path):
     store = RunStore(project)
     run = next(r for r in store.scan() if r.id.startswith("run-real"))
     assert store.summary(run)["mock"] is False
+
+
+def test_onboarding_is_not_done_until_completed(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from agentguard.server.app import create_app
+
+    client = TestClient(create_app(tmp_path))
+    assert client.get("/api/onboarding").json() == {"done": False}
+    assert client.post("/api/onboarding/complete").json() == {"done": True}
+    assert client.get("/api/onboarding").json() == {"done": True}
+    assert (tmp_path / ".agentguard" / "onboarding.json").is_file()

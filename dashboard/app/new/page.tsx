@@ -70,6 +70,7 @@ function NewRunForm() {
     };
     try {
       const status = await postJSON<RunStatus>("/api/runs", body);
+      await postJSON("/api/onboarding/complete").catch(() => undefined);
       router.push(`/run?id=${encodeURIComponent(status.run_id)}&tab=overview`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : (err as Error).message);

@@ -18,7 +18,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-import json
 
 from agentguard import __version__
 from agentguard.server import keys as keystore
@@ -126,6 +125,10 @@ def _static_file(path: str) -> FileResponse:
     raise HTTPException(status_code=404, detail="not found")
 
 
+def _onboarding_marker(project_root: Path) -> Path:
+    return Path(project_root) / ".agentguard" / "onboarding.json"
+
+
 def _no_store(response: Response) -> None:
     response.headers["Cache-Control"] = "no-store"
 
@@ -163,6 +166,18 @@ def create_app(
             "run_count": len(runs),
             "run_dirs": [str(p) for p in store.run_dirs],
         }
+
+    @app.get("/api/onboarding")
+    def onboarding_status() -> dict[str, bool]:
+        return {"done": _onboarding_marker(store.project_root).is_file()}
+
+    @app.post("/api/onboarding/complete")
+    def onboarding_complete() -> dict[str, bool]:
+        """Records that the setup guide was finished (or skipped). Kept in the project, not the browser."""
+        marker = _onboarding_marker(store.project_root)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps({"done": True}) + "\n", encoding="utf-8")
+        return {"done": True}
 
     @app.get("/api/runs")
     def list_runs() -> list[dict[str, Any]]:
