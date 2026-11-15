@@ -83,7 +83,7 @@ function Overview({ run }: { run: RunDetail }) {
         </div>
       ) : null}
       {warnings.map((w) => (
-        <div className="banner" key={w}>
+        <div className="banner warn" key={w}>
           {w}
         </div>
       ))}

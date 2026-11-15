@@ -49,7 +49,7 @@ async function send<T>(method: string, path: string, body?: unknown): Promise<T>
     if (typeof detail === "string") {
       message = detail;
     } else if (Array.isArray(detail)) {
-      message = detail.map((d: { msg?: string }) => d.msg ?? "invalid value").join("; ");
+      message = detail.map(friendlyValidationError).join("; ");
     }
     throw new ApiError(res.status, message);
   }
@@ -59,3 +59,14 @@ async function send<T>(method: string, path: string, body?: unknown): Promise<T>
 export const postJSON = <T>(path: string, body?: unknown) => send<T>("POST", path, body ?? {});
 export const putJSON = <T>(path: string, body: unknown) => send<T>("PUT", path, body);
 export const deleteJSON = <T>(path: string) => send<T>("DELETE", path);
+
+/** Turns a FastAPI validation item into a sentence a user can act on. */
+function friendlyValidationError(d: { msg?: string; loc?: unknown[] }): string {
+  const field = Array.isArray(d.loc) ? String(d.loc[d.loc.length - 1] ?? "") : "";
+  const label = field && field !== "body" ? field.replace(/_/g, " ") : "value";
+  const msg = d.msg ?? "invalid value";
+  if (msg.startsWith("String should match pattern")) {
+    return `${label}: contains characters that are not allowed. Use letters, numbers and / . : _ - only.`;
+  }
+  return `${label}: ${msg.replace(/^Value error, /, "")}`;
+}

@@ -41,6 +41,21 @@ export function PlanReview({ runId }: { runId: string }) {
   }, [plan.data]);
 
   const waiting = status.data?.awaiting_plan === true;
+  const runActive = status.data ? status.data.state === "queued" || status.data.state === "running" : true;
+  const { refetch: refetchPlan } = plan;
+  const { refetch: refetchStatus } = status;
+  const havePlan = plan.data !== null;
+
+  // The plan is written a few seconds after the run starts. While the run is active, keep
+  // checking for the plan and for the review state, so opening this tab early never gets stuck.
+  useEffect(() => {
+    if (!runActive) return;
+    const timer = setInterval(() => {
+      refetchStatus();
+      if (!havePlan) refetchPlan();
+    }, 1500);
+    return () => clearInterval(timer);
+  }, [runActive, havePlan, refetchPlan, refetchStatus]);
   const included = useMemo(() => plan.data?.plan.items.filter((i) => include[i.candidate_id]) ?? [], [plan.data, include]);
   const others = useMemo(() => {
     if (!plan.data) return [];
@@ -48,8 +63,15 @@ export function PlanReview({ runId }: { runId: string }) {
     return plan.data.candidates.filter((c) => !inPlan.has(c.id));
   }, [plan.data]);
 
-  if (plan.loading) return <Loading what="Loading plan" />;
-  if (plan.error) {
+  if (!plan.data && runActive) {
+    return (
+      <Panel>
+        <p className="muted">Reading your code to build the plan… It appears here in a few seconds.</p>
+      </Panel>
+    );
+  }
+  if (plan.loading && !plan.data) return <Loading what="Loading plan" />;
+  if (plan.error && !plan.data) {
     return (
       <Panel>
         <p className="muted">No plan for this run. Automatic runs create one; advanced runs skip planning.</p>
@@ -69,6 +91,7 @@ export function PlanReview({ runId }: { runId: string }) {
       }));
       await postJSON(runPath(runId, "/plan/approve"), { edits });
       setNote({ kind: "ok", text: "Plan approved. The run continues." });
+      refetchStatus();
     } catch (err) {
       setNote({ kind: "error", text: err instanceof ApiError ? err.message : (err as Error).message });
     } finally {

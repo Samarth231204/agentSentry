@@ -106,3 +106,28 @@ def test_run_detail_sees_files_written_after_first_scan(tmp_path):
     run = store.get(next(r.id for r in store.scan() if r.id.startswith("run-late")))
     assert "findings.json" in run.files
     assert store.findings_doc(run)["source"] == "findings.json"
+
+
+def _run_with_attempts(tmp_path, attempts):
+    project = tmp_path / "project"
+    run_dir = project / ".agentguard" / "runs" / "run-err"
+    run_dir.mkdir(parents=True)
+    (run_dir / "findings.json").write_text(json.dumps({"attempts": attempts}), encoding="utf-8")
+    store = RunStore(project)
+    run = next(r for r in store.scan() if r.id.startswith("run-err"))
+    return store.summary(run)["warnings"]
+
+
+def test_rejected_key_is_explained_when_every_attack_errors(tmp_path):
+    detail = 'attack runner error: BadRequestError: GroqException - {"error":{"message":"Invalid API Key"}}'
+    attempts = [{"category": c, "status": "error", "oracle_detail": detail}
+                for c in ("prompt_injection", "tool_misuse")]
+    warnings = _run_with_attempts(tmp_path, attempts)
+    assert any("rejected your API key" in w for w in warnings)
+
+
+def test_no_error_warning_when_some_attacks_ran(tmp_path):
+    attempts = [{"category": "prompt_injection", "status": "error", "oracle_detail": "Invalid API Key"},
+                {"category": "tool_misuse", "status": "failed", "oracle_detail": None}]
+    warnings = _run_with_attempts(tmp_path, attempts)
+    assert not any("Every attack" in w for w in warnings)

@@ -35,7 +35,9 @@ def configure_target_directory(path: str | Path) -> None:
 
 
 def _emit(event_type: str, **payload: object) -> None:
-    get_event_bus().emit(TraceEvent(source="mcp", event_type=event_type, payload=payload))
+    # Named so the dashboard's MCP table shows where the call went (these tools run inside the reporter).
+    get_event_bus().emit(TraceEvent(source="mcp", event_type=event_type,
+                                    payload={"server": "reporter-tools", "transport": "in-process", **payload}))
 
 
 def lookup_owasp(category: str) -> str:

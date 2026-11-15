@@ -270,7 +270,23 @@ class RunStore:
         out: list[str] = []
         doc_source = self.findings_doc(run).get("source")
         if doc_source is None:
-            out.append("No results yet. This test did not reach the attack step, or it was cancelled before it finished.")
+            out.append("No results yet. They appear here when the attack step finishes. A test that was "
+                       "cancelled or stopped early has none.")
+        errored = [f for f in findings if f.get("status") == "error"]
+        if findings and len(errored) == len(findings):
+            detail = " ".join(str(errored[0].get("oracle_detail") or "").split())
+            low = detail.lower()
+            if any(s in low for s in ("invalid api key", "invalid_api_key", "authentication", "unauthorized", " 401")):
+                reason = "The model provider rejected your API key. Open Settings, click Test key, and save a valid key."
+            elif any(s in low for s in ("rate limit", "ratelimit", "429")):
+                reason = ("The model provider rate-limited this test. Wait a minute and try again, or add a second "
+                          "provider key in Settings so the fallback chain can take over.")
+            elif "budget" in low:
+                reason = "The model call or token limit for this test was reached before the attacks could run."
+            else:
+                reason = "Open the Findings tab to see the error behind each attack."
+            out.append(f"Every attack in this test failed with an error, so it says nothing about your agent's "
+                       f"security. {reason} First error: {detail[:200]}")
         if "report.json" in run.files and self.report_json(run) is None:
             out.append("report.json exists but could not be parsed.")
         counted = scorecard.get("total_attempts", 0)
