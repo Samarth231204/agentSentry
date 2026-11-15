@@ -32,6 +32,8 @@ MEMORY_HINTS = ("memory", "remember", "recall")
 DESTRUCTIVE_HINTS = (
     "transfer", "pay", "charge", "refund", "delete", "remove", "drop", "send", "email", "wire",
     "withdraw", "shell", "exec", "purge", "cancel", "deploy", "update", "write", "modify",
+    # account and permission changes: a red-team run must not perform them for real
+    "grant", "revoke", "promote", "elevate", "set_role", "add_role", "make_admin", "reset_password",
 )
 
 
@@ -116,9 +118,15 @@ def _entry_candidate(info: FileInfo, fn: FunctionInfo) -> Optional[tuple[float, 
     return min(score, 1.0), signals
 
 
+def _llm_callees(info: FileInfo) -> set[str]:
+    """Names called by functions that also call an LLM: what feeds the prompt (retrievers, memory)."""
+    return {_last(c) for f in info.functions if f.has_llm_call for c in f.calls}
+
+
 def _candidates_for(info: FileInfo, fn: FunctionInfo) -> list[tuple[str, float, list[str], bool]]:
     """(role, confidence, signals, destructive) for one function."""
     out: list[tuple[str, float, list[str], bool]] = []
+    feeds_llm = fn.name in _llm_callees(info) and not fn.has_llm_call
     destructive, d_signals = is_destructive(fn)
     last = _last(fn.name)
 
@@ -131,6 +139,9 @@ def _candidates_for(info: FileInfo, fn: FunctionInfo) -> list[tuple[str, float, 
         out.append(("watch", 0.95, ["decorated as a tool"] + d_signals, destructive))
     elif fn.name in info.tool_refs:
         out.append(("watch", 0.85, ["passed to an agent in tools=[...]"] + d_signals, destructive))
+    elif fn.name in info.schema_tools and not fn.is_method:
+        out.append(("watch", 0.85, ["declared in a tool schema or name-to-function dispatch table"] + d_signals,
+                    destructive))
     elif destructive and fn.name in info.value_refs:
         out.append(("watch", 0.8, ["registered as a value (tool table or dict)"] + d_signals, True))
     elif destructive and not (entry and entry[0] >= AUTO):
@@ -141,13 +152,15 @@ def _candidates_for(info: FileInfo, fn: FunctionInfo) -> list[tuple[str, float, 
 
     if any(h in fn.name.lower() for h in RETRIEVAL_HINTS) or any(_last(c) in RETRIEVAL_CALLS for c in fn.calls):
         has_rag = "rag" in info.frameworks
-        out.append(("watch_retrieval", 0.8 if has_rag else 0.6,
-                    ["retrieval call or name"] + (["RAG library imported"] if has_rag else []), False))
+        out.append(("watch_retrieval", 0.8 if has_rag or feeds_llm else 0.6,
+                    ["retrieval call or name"] + (["RAG library imported"] if has_rag else [])
+                    + (["called by the function that calls the LLM"] if feeds_llm else []), False))
 
     if any(h in fn.name.lower() for h in MEMORY_HINTS) or any(c in MEMORY_CALLS for c in fn.calls):
         has_mem = "memory" in info.frameworks
-        out.append(("watch_memory", 0.8 if has_mem else 0.6,
-                    ["memory read/write"] + (["memory library imported"] if has_mem else []), False))
+        out.append(("watch_memory", 0.8 if has_mem or feeds_llm else 0.6,
+                    ["memory read/write"] + (["memory library imported"] if has_mem else [])
+                    + (["called by the function that calls the LLM"] if feeds_llm else []), False))
 
     if fn.outbound_calls:
         out.append(("watch_outbound", 0.8, [f"outbound request: {', '.join(fn.outbound_calls[:3])}"], destructive))

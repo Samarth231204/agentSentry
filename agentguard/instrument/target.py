@@ -22,8 +22,10 @@ sys.path.insert(0, {package_parent!r})  # must run before the first import of ag
 
 from agentguard.adapter import app, expose
 from agentguard.instrument.hook import install
+from agentguard.instrument.llm_observer import install as observe_llm_clients
 
 install({plan_path!r}, {project_root!r})
+observe_llm_clients()  # record the prompts the project sends to its model, whichever client it uses
 _module = importlib.import_module({entry_module!r})
 expose(getattr(_module, {entry_name!r}))
 '''

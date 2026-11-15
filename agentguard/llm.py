@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
@@ -21,7 +22,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from agentguard.config import get_config, normalize_model
+from agentguard.config import get_config, normalize_model, usable_fallbacks
 from agentguard.logging import get_logger
 
 logger = get_logger("llm")
@@ -54,20 +55,109 @@ def _emit_fallback(role: str, from_model: str, to_model: str, reason: str) -> No
         "role": role, "from": from_model, "to": to_model, "reason": reason}))
 
 
+_RETRY_IN_RE = re.compile(r"try again in\s+(?:(\d+(?:\.\d+)?)m(?!s))?\s*(?:(\d+(?:\.\d+)?)(ms|s))?", re.IGNORECASE)
+MAX_HINTED_WAIT = 60.0
+
+
+def retry_after_seconds(exc: BaseException) -> Optional[float]:
+    """The wait a provider asked for in a rate-limit error ("try again in 1m2.5s", "in 727ms"), if any."""
+    headers = getattr(getattr(exc, "response", None), "headers", None) or {}
+    try:
+        value = headers.get("retry-after")
+        if value is not None:
+            return max(0.0, float(value))
+    except (TypeError, ValueError, AttributeError):
+        pass
+    match = _RETRY_IN_RE.search(str(exc))
+    if not match or not (match.group(1) or match.group(2)):
+        return None
+    seconds = float(match.group(1) or 0) * 60
+    if match.group(2):
+        seconds += float(match.group(2)) / (1000 if match.group(3).lower() == "ms" else 1)
+    return seconds
+
+
+# Models that asked for a wait longer than MAX_HINTED_WAIT (a per-day limit, usually), keyed to
+# the time.monotonic() at which they may be tried again. Later calls go straight to a fallback.
+_cooling_until: dict[str, float] = {}
+
+
+def mark_cooling(model: str, exc: BaseException) -> None:
+    hint = retry_after_seconds(exc)
+    if hint is not None and hint > MAX_HINTED_WAIT:
+        import time as _time
+        _cooling_until[model] = _time.monotonic() + hint
+
+
+def is_cooling(model: str) -> bool:
+    import time as _time
+    until = _cooling_until.get(model)
+    if until is None:
+        return False
+    if _time.monotonic() >= until:
+        _cooling_until.pop(model, None)
+        return False
+    return True
+
+
+def skip_cooling(chain: list[str]) -> list[str]:
+    """The chain without models that are waiting out a long limit; the whole chain if all are."""
+    ready = [m for m in chain if not is_cooling(m)]
+    return ready or chain
+
+
+_TOO_LARGE_RE = re.compile(r"request too large.*?\b(?:output tokens|tokens)\b.*?limit\s+(\d+)", re.IGNORECASE | re.DOTALL)
+
+
+def output_limit_hint(exc: BaseException) -> Optional[int]:
+    """A provider refusing a request as too large for its token limit (Groq: "Request too large ...
+    Limit 1000"). Waiting never helps; asking for fewer output tokens does. Returns a max_tokens
+    that fits, or None."""
+    text = str(exc)
+    if "reduce max_tokens" not in text.lower() and "request too large" not in text.lower():
+        return None
+    match = _TOO_LARGE_RE.search(text)
+    if not match:
+        return None
+    return max(64, int(int(match.group(1)) * 0.9))
+
+
+def is_malformed_tool_call(exc: BaseException) -> bool:
+    """The model produced an invalid tool call (Groq: tool_use_failed). Sending the request again usually works."""
+    text = str(exc).lower()
+    return "tool_use_failed" in text or "tool call validation failed" in text
+
+
 def _is_retryable_error(exc: BaseException) -> bool:
     """Check if exception is a transient HTTP/network or rate limit error."""
     err_str = str(exc).lower()
     # Never retry on permanent daily quota exhaustion
-    if any(q in err_str for q in ("quota exceeded", "resource_exhausted", "daily limit")):
+    if any(q in err_str for q in ("quota exceeded", "resource_exhausted", "daily limit", "per day")):
         return False
+    if is_malformed_tool_call(exc):
+        return True
+    if output_limit_hint(exc) is not None:
+        return False  # waiting never helps; chat() retries with a smaller max_tokens
     if any(k in err_str for k in ("rate_limit", "ratelimit", "429", "timeout", "timed out", "connection error", "503", "502")):
         return True
     return False
 
 
+def _wait_for_retry(retry_state: Any) -> float:
+    """Wait as long as the provider asked (plus a margin), else back off exponentially."""
+    exc = retry_state.outcome.exception() if retry_state.outcome else None
+    hint = retry_after_seconds(exc) if exc is not None else None
+    if hint is not None and hint <= MAX_HINTED_WAIT:
+        return hint + 0.5
+    return _exponential(retry_state)
+
+
+_exponential = wait_exponential(multiplier=1.5, min=2, max=30)
+
+
 @retry(
-    stop=stop_after_attempt(4),
-    wait=wait_exponential(multiplier=1.5, min=2, max=30),
+    stop=stop_after_attempt(6),
+    wait=_wait_for_retry,
     retry=retry_if_exception(_is_retryable_error),
     reraise=True,
 )
@@ -113,16 +203,25 @@ def chat(
 
     chain = [target_model]
     if model is None:  # only the default model falls back; an explicit model is respected
-        chain += [normalize_model(m) for m in config.fallback_chain if normalize_model(m) != target_model]
+        chain += usable_fallbacks(target_model, config.fallback_chain)
+    chain = skip_cooling(chain)
     resp = None
     for index, candidate in enumerate(chain):
         try:
-            resp = _completion_with_retry(model=candidate, messages=messages, **call_kwargs)
+            try:
+                resp = _completion_with_retry(model=candidate, messages=messages, **call_kwargs)
+            except RETRYABLE_ERRORS as exc:
+                fits = output_limit_hint(exc)
+                if fits is None or fits >= call_kwargs["max_tokens"]:
+                    raise
+                # Too large for this provider's output limit: the same request with a smaller cap fits.
+                resp = _completion_with_retry(model=candidate, messages=messages, **{**call_kwargs, "max_tokens": fits})
             target_model = candidate
             if index > 0:
                 _emit_fallback(role, chain[0], candidate, "fallback after provider error")
             break
         except RETRYABLE_ERRORS as exc:
+            mark_cooling(candidate, exc)
             if index == len(chain) - 1:
                 raise
             _emit_fallback(role, candidate, chain[index + 1], f"{type(exc).__name__}")

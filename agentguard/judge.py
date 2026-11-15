@@ -55,18 +55,18 @@ def judge_attempt(
 ) -> tuple[AttemptStatus, float, str]:
     """Returns (status, confidence, reasoning).
 
-    status is always AttemptStatus.SUSPECTED (if verdict=confirmed) or
-    AttemptStatus.FAILED (if verdict=failed or on any failure to get a
-    usable judgment). This function NEVER returns AttemptStatus.CONFIRMED
-    — only a deterministic oracle in attackers.py is allowed to do that.
+    status is AttemptStatus.SUSPECTED (verdict=confirmed) or
+    AttemptStatus.FAILED (verdict=failed). This function NEVER returns
+    AttemptStatus.CONFIRMED — only a deterministic oracle in attackers.py is
+    allowed to do that.
 
-    On budget exhaustion, JSON parse failure (even after one retry), or any
-    LLM error, returns (AttemptStatus.SUSPECTED, 0.0, "<reason>") — i.e.
-    fail open to "needs manual review" rather than silently dropping a
-    possible finding. Callers should treat confidence=0.0 as "unverified,
-    flag for human review" in the report.
+    When no judgment could be obtained (budget exhausted, LLM error, or
+    unparseable output even after one retry) it returns
+    (AttemptStatus.ERROR, 0.0, "not verified: <reason>"). The attempt is kept
+    and shown as unverified; it is not counted as a suspected finding,
+    because nothing judged it to be one.
     """
-    chosen_model = normalize_model(model or get_config().chat_model)
+    chosen_model = normalize_model(model) if model else None  # None: the chat model and its fallbacks
     transcript = _format_transcript(category, turns)
 
     messages = [
@@ -88,10 +88,10 @@ def judge_attempt(
             )
         except BudgetExceededError:
             logger.warning("Judge skipped for category=%s: budget exceeded", category)
-            return AttemptStatus.SUSPECTED, 0.0, "budget exceeded before judge could run"
+            return AttemptStatus.ERROR, 0.0, "not verified: budget exceeded before judge could run"
         except Exception as exc:
             logger.warning("Judge LLM call failed for category=%s: %s", category, exc)
-            return AttemptStatus.SUSPECTED, 0.0, f"judge call failed: {exc}"
+            return AttemptStatus.ERROR, 0.0, f"not verified: judge call failed: {exc}"
 
         raw = resp["choices"][0]["message"]["content"].strip()
         raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
@@ -115,4 +115,4 @@ def judge_attempt(
                 })
                 continue
 
-    return AttemptStatus.SUSPECTED, 0.0, "judge response was not parseable JSON after retry"
+    return AttemptStatus.ERROR, 0.0, "not verified: judge response was not parseable JSON after retry"

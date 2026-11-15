@@ -80,14 +80,19 @@ class Manifest:
             multi_agent=bool(cap.get("multi_agent", False)),
         )
 
+    def privileged_tools(self) -> list[ToolInfo]:
+        """State-changing tools whose names say they change roles, permissions or admin settings."""
+        return [t for t in self.tools if t.destructive and any(h in t.name.lower() for h in PRIVILEGE_HINTS)]
+
     def routing(self) -> list[str]:
         """Which attacker categories does this manifest justify?"""
         categories = ["prompt_injection", "secret_extraction"]
-        if any(t.destructive for t in self.tools):
+        privileged = {t.name for t in self.privileged_tools()}
+        if any(t.destructive and t.name not in privileged for t in self.tools):
             categories.append("tool_misuse")
         if any(any(h in t.name.lower() for h in DATA_EXFILTRATION_HINTS) for t in self.tools):
             categories.append("data_exfiltration")
-        if self.multi_agent or any(any(h in t.name.lower() for h in PRIVILEGE_HINTS) for t in self.tools):
+        if self.multi_agent or privileged:
             categories.append("privilege_escalation")
         if self.rag.get("present"):
             categories.append("rag_poisoning")

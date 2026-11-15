@@ -57,6 +57,40 @@ def normalize_model(model: str) -> str:
     return m
 
 
+# Which environment variable(s) hold the credentials for a LiteLLM provider prefix.
+PROVIDER_KEY_ENVS: dict[str, tuple[str, ...]] = {
+    "groq": ("GROQ_API_KEY",),
+    "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+    "openai": ("OPENAI_API_KEY",),
+    "anthropic": ("ANTHROPIC_API_KEY",),
+    "cohere": ("COHERE_API_KEY",),
+}
+
+
+def has_credentials(model: str) -> bool:
+    """False only when the model's provider needs a key and none is set (a call could never succeed)."""
+    prefix = normalize_model(model).split("/", 1)[0].lower()
+    envs = PROVIDER_KEY_ENVS.get(prefix)
+    return envs is None or any(os.environ.get(e) for e in envs)
+
+
+def usable_fallbacks(primary: str, chain: list[str]) -> list[str]:
+    """The fallback models to try after `primary`: normalized, deduplicated, and only providers with a key.
+
+    A model whose provider has no key fails with an authentication error, so trying it only hides
+    the original (usually rate-limit) error behind a confusing one.
+    """
+    seen = {normalize_model(primary)}
+    out: list[str] = []
+    for name in chain:
+        model = normalize_model(name)
+        if model in seen or not has_credentials(model):
+            continue
+        seen.add(model)
+        out.append(model)
+    return out
+
+
 class AgentGuardConfig(BaseModel):
     attacker_model: str = Field(
         default_factory=lambda: os.environ.get(
@@ -80,7 +114,8 @@ class AgentGuardConfig(BaseModel):
         default_factory=lambda: [
             m.strip() for m in os.environ.get(
                 "AGENTGUARD_FALLBACK_CHAIN",
-                "groq/openai/gpt-oss-20b,gemini/gemini-2.5-flash",
+                # Groq rate limits are per model, so a second Groq model is a real fallback on one key.
+                "groq/openai/gpt-oss-20b,groq/openai/gpt-oss-120b,gemini/gemini-2.5-flash",
             ).split(",") if m.strip()
         ]
     )

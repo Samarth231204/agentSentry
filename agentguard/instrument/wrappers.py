@@ -19,6 +19,7 @@ from agentguard import adapter
 
 ROLES = ("tool", "retrieval", "memory", "llm", "outbound")
 SANDBOX_REPLY = "[AgentGuard sandbox] {name} was recorded but not executed."
+SANDBOXED_ROLES = ("tool", "outbound")  # a sandboxed side effect is recorded, never performed
 
 
 def record_observation(role: str, name: str, args: dict, result: Any = None) -> None:
@@ -60,7 +61,7 @@ def wrap(role: str, sandbox: bool = False) -> Callable[[Callable[..., Any]], Cal
             @functools.wraps(fn)
             async def awrapper(*args: Any, **kwargs: Any) -> Any:
                 _observe(role, fn, args, kwargs, sandbox)
-                if sandbox and role == "tool":
+                if sandbox and role in SANDBOXED_ROLES:
                     return SANDBOX_REPLY.format(name=fn.__name__)
                 return await fn(*args, **kwargs)
             return awrapper
@@ -72,7 +73,7 @@ def wrap(role: str, sandbox: bool = False) -> Callable[[Callable[..., Any]], Cal
                 _observe(role, fn, args, kwargs, sandbox, result=out)
                 return out
             _observe(role, fn, args, kwargs, sandbox)
-            if sandbox and role == "tool":
+            if sandbox and role in SANDBOXED_ROLES:
                 return SANDBOX_REPLY.format(name=fn.__name__)
             return fn(*args, **kwargs)
         return wrapper

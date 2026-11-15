@@ -16,7 +16,7 @@ from typing import Iterator, Optional
 
 from agentguard.discovery.symbols import FileInfo, analyse_source
 
-CACHE_VERSION = "2"
+CACHE_VERSION = "3"
 MAX_FILE_BYTES = 1_000_000
 SKIP_DIRS = {
     ".git", ".hg", ".svn", ".venv", "venv", "env", "node_modules", "__pycache__",

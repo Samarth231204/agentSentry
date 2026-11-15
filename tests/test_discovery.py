@@ -38,12 +38,19 @@ def test_explicit_decorators_are_recognised(tmp_path):
     assert any(c.name == "transfer_funds" and c.bucket == "auto" for c in result.candidates)
 
 
-def test_rag_sample_retrieval_is_ambiguous_not_auto(tmp_path):
+def test_rag_sample_retriever_feeding_the_llm_is_auto(tmp_path):
+    # No RAG library, but the retriever is called by the function that calls the model.
     _write(tmp_path, "app.py", (REPO / "samples/rag_leaky/app.py").read_text())
     result = discover(tmp_path)
     retrieval = [c for c in result.candidates if c.role == "watch_retrieval"]
-    assert retrieval and all(c.bucket == "ambiguous" for c in retrieval)
-    assert all(AMBIGUOUS <= c.confidence < AUTO for c in retrieval)
+    assert retrieval and all(c.bucket == "auto" for c in retrieval)
+    assert any("calls the LLM" in s for c in retrieval for s in c.signals)
+
+
+def test_retrieval_name_alone_stays_ambiguous(tmp_path):
+    _write(tmp_path, "app.py", "def retrieve(q):\n    return q\n\ndef report(x):\n    return retrieve(x)\n")
+    retrieval = [c for c in discover(tmp_path).candidates if c.role == "watch_retrieval"]
+    assert retrieval and all(AMBIGUOUS <= c.confidence < AUTO for c in retrieval)
 
 
 def test_skips_tests_envs_and_agentguard_itself(tmp_path):

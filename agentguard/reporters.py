@@ -205,6 +205,67 @@ def _source_snippets(manifest: Manifest | None, max_chars: Optional[int] = None)
     return "\n\n".join(chunks) if chunks else "(no source files found for declared tools)"
 
 
+PATIENT_RETRIES = 6
+
+
+def _patient(llm: Any) -> Any:
+    """Retries one crew LLM call when the provider throttles it or the model emits a broken tool call.
+
+    Without this a single 429 inside one agent's step aborts crew.kickoff(), and the retry in
+    generate_report() starts all three agents again from the beginning, which spends the same
+    per-minute token budget that caused the 429 in the first place.
+    """
+    from agentguard.llm import MAX_HINTED_WAIT, is_malformed_tool_call, output_limit_hint, retry_after_seconds
+
+    def should_retry(exc: Exception, attempt: int) -> Optional[float]:
+        if attempt >= PATIENT_RETRIES:
+            return None
+        if is_malformed_tool_call(exc):
+            return 0.0
+        fits = output_limit_hint(exc)
+        if fits is not None:  # too large for the provider's output limit: ask for less, right away
+            object.__setattr__(llm, "max_tokens", fits)
+            return 0.0
+        if "rate_limit" in str(exc).lower() or "RateLimitError" in type(exc).__name__:
+            hint = retry_after_seconds(exc)
+            if hint is not None and hint <= MAX_HINTED_WAIT:
+                return hint + 0.5
+        return None
+
+    original = llm.call
+
+    def call(*args: Any, **kwargs: Any) -> Any:
+        attempt = 0
+        while True:
+            try:
+                return original(*args, **kwargs)
+            except Exception as exc:  # noqa: BLE001
+                wait = should_retry(exc, attempt)
+                if wait is None:
+                    raise
+                attempt += 1
+                logger.info("Reporter LLM call throttled or malformed, retrying in %.1fs", wait)
+                time.sleep(wait)
+
+    object.__setattr__(llm, "call", call)
+    original_async = getattr(llm, "acall", None)
+    if original_async is not None:
+        async def acall(*args: Any, **kwargs: Any) -> Any:
+            import asyncio as _asyncio
+            attempt = 0
+            while True:
+                try:
+                    return await original_async(*args, **kwargs)
+                except Exception as exc:  # noqa: BLE001
+                    wait = should_retry(exc, attempt)
+                    if wait is None:
+                        raise
+                    attempt += 1
+                    await _asyncio.sleep(wait)
+        object.__setattr__(llm, "acall", acall)
+    return llm
+
+
 def _mcp_servers(project_path: Optional[str | Path]):
     """Our MCP servers over Streamable HTTP when `agentguard up` started them; stdio otherwise."""
     import os as _os
@@ -221,14 +282,21 @@ def _mcp_servers(project_path: Optional[str | Path]):
 def _mcp_servers_stdio(project_path: Optional[str | Path]) -> list[MCPServerStdio] | None:
     if not project_path:
         return None
+    import os as _os
     repo_root = str(Path(__file__).resolve().parent.parent)
+    # CrewAI names each MCP tool "<command>_<args>_<tool>" and cuts it to 64 characters. With the
+    # interpreter's absolute path as the command, a long install path pushes the real tool name
+    # (search_code, ...) past the cut, so every tool gets the same unreadable name and the model
+    # calls tools that do not exist. Use the bare interpreter name and put its folder first on PATH.
+    interpreter = Path(sys.executable)
     return [MCPServerStdio(
-        command=sys.executable,
+        command=interpreter.name,
         args=["-m", "agentguard.mcp_server"],
         env={
             "AGENTGUARD_TARGET_DIRECTORY": str(Path(project_path).resolve()),
             "AGENTGUARD_TRACE_PATH": "trace.jsonl",
             "PYTHONPATH": repo_root,
+            "PATH": _os.pathsep.join([str(interpreter.parent), _os.environ.get("PATH", "")]),
         },
     )]
 
@@ -298,7 +366,7 @@ def build_crew(findings: dict[str, Any], scorecard: dict[str, Any],
                 project_path: Optional[str | Path] = None) -> Crew:
     chosen_model = normalize_model(model or get_config().reporter_model)
     logger.debug("Building CrewAI reporter crew using model: %s", chosen_model)
-    llm = LLM(model=chosen_model)
+    llm = _patient(LLM(model=chosen_model))
     mcps = _mcp_servers(project_path)
     mcp_repo_path = str(Path(project_path).resolve()) if project_path else ""
 
@@ -480,10 +548,12 @@ def generate_report(findings_path: str | Path, report_path: str | Path,
         report = _enrich_report(report, manifest, resolved_proj_path)
         return _write_report(report, report_path)
 
-    from agentguard.config import get_config, normalize_model
+    from agentguard.config import get_config, normalize_model, usable_fallbacks
+    from agentguard.llm import is_malformed_tool_call, output_limit_hint, retry_after_seconds
     cfg = get_config()
     primary = normalize_model(model or cfg.reporter_model)
-    chain = [primary] + [normalize_model(m) for m in cfg.fallback_chain if normalize_model(m) != primary]
+    from agentguard.llm import mark_cooling, skip_cooling
+    chain = skip_cooling([primary] + usable_fallbacks(primary, cfg.fallback_chain))
 
     last_error: Exception | None = None
     result = None
@@ -496,12 +566,22 @@ def generate_report(findings_path: str | Path, report_path: str | Path,
                 break
             except Exception as e:  # noqa: BLE001
                 last_error = e
+                if is_malformed_tool_call(e) and attempt < 3:
+                    # The model emitted a broken tool call (a generation glitch, not a request error):
+                    # the same request usually succeeds when sent again.
+                    logger.warning("Reporter model produced a malformed tool call, retrying (%s)", e)
+                    continue
+                if output_limit_hint(e) is not None:
+                    logger.error("Reporter request exceeds %s's output limit even after shrinking: %s", candidate, e)
+                    break  # waiting cannot fix a request that is too large: try the next model
                 if "rate_limit" not in str(e).lower() and "RateLimitError" not in type(e).__name__:
                     logger.error("CrewAI kickoff failed with non-rate-limit error: %s", e)
                     break
-                if attempt == 3:
-                    break  # this model is still throttled: move to the next one in the chain
-                sleep_duration = 25 * (attempt + 1)
+                mark_cooling(candidate, e)
+                hint = retry_after_seconds(e)
+                if attempt == 3 or (hint is not None and hint > 90):
+                    break  # still throttled, or throttled for long: move to the next model in the chain
+                sleep_duration = min(90.0, hint + 1.0) if hint is not None else 25 * (attempt + 1)
                 logger.warning("CrewAI hit rate limit, waiting %ds before retry (%s)", sleep_duration, e)
                 time.sleep(sleep_duration)
         if result is not None:

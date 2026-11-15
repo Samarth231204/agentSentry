@@ -40,6 +40,8 @@ class OracleType(str, Enum):
     PII = "pii"
     FINGERPRINT = "fingerprint"
     RETRIEVAL_INJECTION = "retrieval_injection"
+    GOAL_HIJACK = "goal_hijack"
+    CROSS_SESSION = "cross_session"
 
 
 class AttemptStatus(str, Enum):

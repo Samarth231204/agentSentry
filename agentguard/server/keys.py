@@ -16,7 +16,7 @@ from typing import Any
 PROVIDERS: dict[str, dict[str, str]] = {
     "groq": {"label": "Groq", "env": "GROQ_API_KEY", "test_model": "groq/openai/gpt-oss-20b"},
     "openai": {"label": "OpenAI", "env": "OPENAI_API_KEY", "test_model": "openai/gpt-4o-mini"},
-    "anthropic": {"label": "Anthropic", "env": "ANTHROPIC_API_KEY", "test_model": "anthropic/claude-3-5-haiku-latest"},
+    "anthropic": {"label": "Anthropic", "env": "ANTHROPIC_API_KEY", "test_model": "anthropic/claude-haiku-5-5"},
     "gemini": {"label": "Gemini", "env": "GEMINI_API_KEY", "test_model": "gemini/gemini-2.5-flash"},
     "openrouter": {"label": "OpenRouter", "env": "OPENROUTER_API_KEY", "test_model": "openrouter/openai/gpt-4o-mini"},
 }

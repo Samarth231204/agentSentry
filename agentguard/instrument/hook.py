@@ -21,6 +21,7 @@ from agentguard.discovery.plan import InstrumentationPlan, PlanItem
 from agentguard.instrument.wrappers import wrap
 
 HOOK_NAME = "__agentguard_wrap__"
+SANDBOXABLE = ("tool", "outbound")  # roles whose real call is replaced by a recorded stand-in
 ROLE_TO_WRAPPER = {
     "watch": "tool",
     "watch_retrieval": "retrieval",
@@ -31,21 +32,32 @@ ROLE_TO_WRAPPER = {
 
 
 def _apply(tree: ast.Module, items: Sequence[PlanItem]) -> int:
-    by_line = {item.line: item for item in items if item.role in ROLE_TO_WRAPPER}
+    # One function can have several roles (a tool that also makes an outbound request), so keep
+    # every item for a line. A dict keyed by line alone kept only the last one, which dropped the
+    # sandboxed tool wrapper of such a function and let its real side effect run.
+    by_line: dict[int, list[PlanItem]] = {}
+    for item in items:
+        if item.role in ROLE_TO_WRAPPER:
+            by_line.setdefault(item.line, []).append(item)
     applied = 0
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
-        item = by_line.get(node.lineno)
-        if item is None or item.name != node.name:
-            continue
-        decorator = ast.Call(
-            func=ast.Name(id=HOOK_NAME, ctx=ast.Load()),
-            args=[ast.Constant(ROLE_TO_WRAPPER[item.role]), ast.Constant(bool(item.sandbox))],
-            keywords=[],
-        )
-        node.decorator_list.append(decorator)  # last = applied first = innermost
-        applied += 1
+        matched = [i for i in by_line.get(node.lineno, []) if i.name == node.name]
+        sandbox = any(i.sandbox for i in matched)  # sandboxed in any role: never run it for real
+        # Sandboxable wrappers go innermost (appended last) and only the innermost one blocks, so
+        # every outer wrapper still records the call before the stand-in reply comes back.
+        # The tool wrapper blocks when present: its record is the one that says "sandboxed".
+        ordered = sorted(matched, key=lambda i: (ROLE_TO_WRAPPER[i.role] in SANDBOXABLE, ROLE_TO_WRAPPER[i.role] == "tool"))
+        for index, item in enumerate(ordered):
+            blocks = sandbox and index == len(ordered) - 1 and ROLE_TO_WRAPPER[item.role] in SANDBOXABLE
+            decorator = ast.Call(
+                func=ast.Name(id=HOOK_NAME, ctx=ast.Load()),
+                args=[ast.Constant(ROLE_TO_WRAPPER[item.role]), ast.Constant(blocks)],
+                keywords=[],
+            )
+            node.decorator_list.append(decorator)  # last = applied first = innermost
+            applied += 1
     return applied
 
 

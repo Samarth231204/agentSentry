@@ -17,9 +17,11 @@ Then run it with `agentguard.adapter.serve()` or `uvicorn <module>:app`.
 
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import functools
 import inspect
+import json
 import time
 from typing import Any, Callable, Optional
 
@@ -69,6 +71,24 @@ def watch(fn: Callable[..., Any]) -> Callable[..., Any]:
     return wrap("tool", sandbox=False)(fn)
 
 
+async def _await(awaitable: Any) -> Any:
+    return await awaitable
+
+
+def _as_text(output: Any) -> Any:
+    """The oracles read the reply as text: keep strings, serialize anything else."""
+    if output is None or isinstance(output, str):
+        return output
+    for attr in ("content", "text", "output"):  # message-like objects
+        value = getattr(output, attr, None)
+        if isinstance(value, str):
+            return value
+    try:
+        return json.dumps(output, default=str)
+    except (TypeError, ValueError):
+        return str(output)
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "entrypoint_registered": _entrypoint is not None}
@@ -96,6 +116,11 @@ def invoke(req: InvokeRequest) -> dict:
             output = _entrypoint(req.input_text, session_id=req.session_id)
         else:
             output = _entrypoint(req.input_text)
+        if inspect.isawaitable(output):
+            # An async entrypoint. This handler runs in a worker thread with no event loop, and
+            # asyncio.run copies the current context, so the request's call log stays active.
+            output = asyncio.run(_await(output))
+        output = _as_text(output)
     except Exception as e:  # noqa: BLE001 - deliberately broad; capture as data
         error = {"type": type(e).__name__, "detail": str(e)}
         logger.warning("Target entrypoint exception: %s: %s", type(e).__name__, e)

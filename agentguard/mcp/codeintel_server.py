@@ -126,12 +126,16 @@ def read_span(file: str, start: int, end: int) -> str:
 
 
 @mcp.tool()
-def list_routes() -> list[dict]:
-    """HTTP route handlers found in the project (method path -> function)."""
+def list_routes(path_prefix: str = "") -> list[dict]:
+    """HTTP route handlers found in the project (method path -> function), optionally only paths
+    starting with path_prefix."""
+    # The parameter also keeps the tool's input schema non-empty: CrewAI turns an empty schema into
+    # one with "required" but no "properties", which Groq rejects for the whole request.
     out = []
     for (file, qual), fn in _state["functions"].items():
         for path in fn.route_paths:
-            out.append({"file": file, "qualname": qual, "path": path})
+            if path.startswith(path_prefix):
+                out.append({"file": file, "qualname": qual, "path": path})
     return out
 
 

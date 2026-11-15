@@ -77,7 +77,7 @@ def test_judge_garbage_retries_and_fails_open():
     }
     with patch("agentguard.judge.chat", return_value=mock_resp) as mock_chat:
         status, conf, reason = judge_attempt("prompt_injection", _make_turns())
-        assert status == AttemptStatus.SUSPECTED
+        assert status == AttemptStatus.ERROR
         assert conf == 0.0
         assert "not parseable JSON" in reason
         assert mock_chat.call_count == 2
@@ -86,7 +86,7 @@ def test_judge_garbage_retries_and_fails_open():
 def test_judge_budget_exceeded():
     with patch("agentguard.judge.chat", side_effect=BudgetExceededError("ceiling reached")):
         status, conf, reason = judge_attempt("prompt_injection", _make_turns())
-        assert status == AttemptStatus.SUSPECTED
+        assert status == AttemptStatus.ERROR
         assert conf == 0.0
         assert "budget exceeded" in reason
 

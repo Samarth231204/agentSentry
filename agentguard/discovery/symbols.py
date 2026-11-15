@@ -82,6 +82,10 @@ class FileInfo:
     functions: list[FunctionInfo] = field(default_factory=list)
     tool_refs: list[str] = field(default_factory=list)  # names passed as tools=[...]
     value_refs: list[str] = field(default_factory=list)  # names used as values (registries, dicts, lists)
+    # Names a model can call: declared in a tool schema ({"name": "x", "parameters": ...}) or mapped
+    # in a dispatch table ({"x": x}). Agents that hand JSON tool schemas to an LLM client and look the
+    # function up by name have no decorator and no tools=[fn] call, so this is how their tools are found.
+    schema_tools: list[str] = field(default_factory=list)
     parse_error: Optional[str] = None
 
     def to_json(self) -> dict[str, Any]:
@@ -225,6 +229,20 @@ def analyse_source(source: str, rel_path: str) -> FileInfo:
                         if isinstance(elt, ast.Name):
                             tool_refs.add(elt.id)
 
+    schema_tools: set[str] = set()
+    schema_keys = {"parameters", "input_schema", "inputSchema", "args_schema"}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        keys = {k.value: v for k, v in zip(node.keys, node.values)
+                if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+        name = keys.get("name")
+        if isinstance(name, ast.Constant) and isinstance(name.value, str) and schema_keys & keys.keys():
+            schema_tools.add(name.value)
+        for k, v in zip(node.keys, node.values):  # {"tool_name": tool_name}
+            if isinstance(k, ast.Constant) and isinstance(v, ast.Name) and k.value == v.id:
+                schema_tools.add(v.id)
+
     functions: list[FunctionInfo] = []
 
     def visit(body: list[ast.stmt], prefix: str, in_class: bool) -> None:
@@ -243,4 +261,5 @@ def analyse_source(source: str, rel_path: str) -> FileInfo:
     info.functions = functions
     info.tool_refs = sorted(tool_refs)
     info.value_refs = sorted(value_refs)
+    info.schema_tools = sorted(schema_tools)
     return info
