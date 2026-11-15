@@ -76,7 +76,7 @@ def test_unknown_provider_is_rejected(project):
 def test_key_status_lists_five_providers_without_values(project):
     keystore.save_key(project, "groq", SECRET)
     status = keystore.key_status(project)
-    assert [p["id"] for p in status] == ["groq", "openai", "anthropic", "gemini", "openrouter"]
+    assert [p["id"] for p in status] == ["anthropic", "groq", "openai", "gemini", "openrouter"]
     assert SECRET not in json.dumps(status)
 
 

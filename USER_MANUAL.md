@@ -29,7 +29,7 @@ This manual guides you through installing AgentGuard, instrumenting your AI agen
 - **Operating System:** Linux, macOS, or Windows 10/11
 - **Python:** Version `3.10`, `3.11`, or `3.12`
 - **Git:** Installed and available in your terminal
-- **LLM API Key:** At least one API key from a supported provider (free-tier options available from Groq, Cohere, or Google AI Studio).
+- **LLM API Key:** At least one API key from a supported provider (Anthropic is recommended: Claude Haiku 5.5 is the default for every role).
 
 ---
 
@@ -98,25 +98,26 @@ copy .env.example .env
 
 ### Step 2: Add your API keys
 
-Open `.env` in any text editor and supply your API key(s). Free tiers are available:
+Open `.env` in any text editor and supply your API key(s):
 
-- **Groq** (Fastest inference & generous free tier): [https://console.groq.com](https://console.groq.com)
+- **Anthropic** (recommended; Claude Haiku 5.5): [https://console.anthropic.com](https://console.anthropic.com). Create the key inside a workspace (Settings → Workspaces → API keys); a key that is not scoped to a workspace only works if you also set `ANTHROPIC_WORKSPACE_ID` (in `.env` or `<project>/.agentguard/.env`).
+- **Groq** (free tier): [https://console.groq.com](https://console.groq.com)
 - **Cohere** (Free trial available): [https://dashboard.cohere.com](https://dashboard.cohere.com)
 - **Google Gemini** (Free AI Studio keys): [https://aistudio.google.com](https://aistudio.google.com)
 
 Example `.env` configuration:
 
 ```env
-GROQ_API_KEY=gsk_your_groq_api_key_here
-COHERE_API_KEY=your_cohere_key_here
+ANTHROPIC_API_KEY=sk-ant-your_key_here
 
-# Recommended high-throughput models:
-AGENTGUARD_ATTACKER_MODEL=groq/openai/gpt-oss-20b
-AGENTGUARD_REPORTER_MODEL=cohere/command-r-08-2024
-AGENTGUARD_CHAT_MODEL=groq/openai/gpt-oss-20b
+# Recommended models (these are also the defaults):
+AGENTGUARD_ATTACKER_MODEL=anthropic/claude-haiku-5-5
+AGENTGUARD_REPORTER_MODEL=anthropic/claude-haiku-5-5
+AGENTGUARD_CHAT_MODEL=anthropic/claude-haiku-5-5
+AGENTGUARD_FALLBACK_CHAIN=anthropic/claude-haiku-5-5
 ```
 
-*(You can also use OpenAI, Anthropic, or local Ollama models. See [Configuration Reference](#9-configuration-reference) below).*
+*(You can also use Groq, OpenAI, Gemini, OpenRouter or local Ollama models. See [Configuration Reference](#9-configuration-reference) below).*
 
 ---
 
@@ -313,9 +314,9 @@ AgentGuard settings can be customized via environment variables in your `.env` f
 ### LLM Model Configuration
 | Variable | Description | Example |
 |---|---|---|
-| `AGENTGUARD_ATTACKER_MODEL` | Model used to generate attack probes | `groq/openai/gpt-oss-20b` |
-| `AGENTGUARD_REPORTER_MODEL` | Model used for security report generation | `cohere/command-r-08-2024` |
-| `AGENTGUARD_CHAT_MODEL` | Fallback model used for judge evaluations | `groq/openai/gpt-oss-20b` |
+| `AGENTGUARD_ATTACKER_MODEL` | Model used to generate attack probes | `anthropic/claude-haiku-5-5` |
+| `AGENTGUARD_REPORTER_MODEL` | Model used for security report generation | `anthropic/claude-haiku-5-5` |
+| `AGENTGUARD_CHAT_MODEL` | Fallback model used for judge evaluations | `anthropic/claude-haiku-5-5` |
 
 *Any model string supported by LiteLLM can be used (e.g., `openai/gpt-4o-mini`, `anthropic/claude-3-5-haiku-20241022`, `ollama/llama3`).*
 
@@ -338,7 +339,7 @@ curl -X POST http://127.0.0.1:8000/invoke -H "Content-Type: application/json" -d
 
 ### Q: I received a `429 Rate Limit` or quota error from my LLM provider.
 **A:** AgentGuard automatically retries transient rate limits with exponential backoff. If you hit a daily quota cap:
-1. Switch to another provider or model in `.env` (e.g. switch between Groq and Cohere).
+1. Switch to another provider or model in `.env` (e.g. switch between Anthropic and Groq).
 2. Reduce `--max-probes` (e.g. `--max-probes 2` or `--max-probes 3`).
 3. Test a subset of categories using `--categories prompt_leak,insecure_tool`.
 

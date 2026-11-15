@@ -20,7 +20,7 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types as genai_types
 
-from agentguard.config import normalize_model
+from agentguard.config import litellm_kwargs, normalize_model
 from agentguard.discovery.candidates import Candidate
 from agentguard.llm_mock import ScriptedDiscoveryModel, mock_enabled
 from agentguard.logging import get_logger
@@ -106,7 +106,7 @@ async def _run_agent(candidates: list[Candidate], model_name: str, budget=None) 
     model = ScriptedDiscoveryModel(model="mock") if mock_enabled() else None
     if model is None:
         from google.adk.models.lite_llm import LiteLlm
-        model = LiteLlm(model=normalize_model(model_name))
+        model = LiteLlm(model=normalize_model(model_name), **litellm_kwargs(model_name))
     tools: list = []
     url = os.environ.get("AGENTGUARD_CODEINTEL_URL")
     if url and not mock_enabled():

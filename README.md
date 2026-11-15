@@ -20,7 +20,7 @@ git clone <this repository> agentguard           # one folder inside your projec
 
 In the dashboard:
 
-1. **Set up key** — paste an API key once (Groq, OpenAI, Anthropic, Gemini or OpenRouter). It is saved to
+1. **Set up key** — paste an API key once (Anthropic is recommended; Groq, OpenAI, Gemini and OpenRouter also work). It is saved to
    `<your-project>/.agentguard/.env` with mode 600, and the browser never keeps it. Test it with one tiny request.
 2. **New run** — leave "Automatic" selected and keep "Review the plan" ticked. Click **Run**.
 3. **Plan** — untick anything that should not be watched. Tools that change state are sandboxed (recorded, not executed).

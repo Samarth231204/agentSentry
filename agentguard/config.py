@@ -67,6 +67,35 @@ PROVIDER_KEY_ENVS: dict[str, tuple[str, ...]] = {
 }
 
 
+def provider_headers(model: str) -> dict[str, str]:
+    """Extra HTTP headers a provider needs besides the key.
+
+    An Anthropic key that is not scoped to a workspace is rejected unless every request names the
+    workspace (anthropic-workspace-id). Set ANTHROPIC_WORKSPACE_ID to send it.
+    """
+    if normalize_model(model).startswith("anthropic/"):
+        workspace = os.environ.get("ANTHROPIC_WORKSPACE_ID", "").strip().strip("\"'").strip()
+        if workspace:
+            return {"anthropic-workspace-id": workspace}
+    return {}
+
+
+def header_kwargs(model: str) -> dict[str, Any]:
+    """provider_headers as LiteLLM keyword arguments ({} when there are none)."""
+    headers = provider_headers(model)
+    return {"extra_headers": headers} if headers else {}
+
+
+def litellm_kwargs(model: str) -> dict[str, Any]:
+    """Per-call LiteLLM options every AgentGuard call uses.
+
+    drop_params: models differ in what they accept (Claude Haiku 5.5 rejects any temperature except 1,
+    reasoning models reject some sampling options). An unsupported option is dropped instead of
+    failing the call; the judge and planners still work, just without that knob.
+    """
+    return {"drop_params": True, **header_kwargs(model)}
+
+
 def has_credentials(model: str) -> bool:
     """False only when the model's provider needs a key and none is set (a call could never succeed)."""
     prefix = normalize_model(model).split("/", 1)[0].lower()
@@ -94,17 +123,17 @@ def usable_fallbacks(primary: str, chain: list[str]) -> list[str]:
 class AgentGuardConfig(BaseModel):
     attacker_model: str = Field(
         default_factory=lambda: os.environ.get(
-            "AGENTGUARD_ATTACKER_MODEL", "groq/openai/gpt-oss-20b"
+            "AGENTGUARD_ATTACKER_MODEL", "anthropic/claude-haiku-5-5"
         )
     )
     reporter_model: str = Field(
         default_factory=lambda: os.environ.get(
-            "AGENTGUARD_REPORTER_MODEL", "groq/openai/gpt-oss-20b"
+            "AGENTGUARD_REPORTER_MODEL", "anthropic/claude-haiku-5-5"
         )
     )
     chat_model: str = Field(
         default_factory=lambda: os.environ.get(
-            "AGENTGUARD_CHAT_MODEL", "groq/openai/gpt-oss-20b"
+            "AGENTGUARD_CHAT_MODEL", "anthropic/claude-haiku-5-5"
         )
     )
     api_base: Optional[str] = Field(
@@ -114,8 +143,8 @@ class AgentGuardConfig(BaseModel):
         default_factory=lambda: [
             m.strip() for m in os.environ.get(
                 "AGENTGUARD_FALLBACK_CHAIN",
-                # Groq rate limits are per model, so a second Groq model is a real fallback on one key.
-                "groq/openai/gpt-oss-20b,groq/openai/gpt-oss-120b,gemini/gemini-2.5-flash",
+                # Models without a configured key are skipped at call time (usable_fallbacks).
+                "anthropic/claude-haiku-5-5,groq/openai/gpt-oss-20b,gemini/gemini-2.5-flash",
             ).split(",") if m.strip()
         ]
     )

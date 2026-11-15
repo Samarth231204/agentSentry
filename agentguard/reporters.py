@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from agentguard._env import load_env
-from agentguard.config import get_config, normalize_model
+from agentguard.config import get_config, litellm_kwargs, normalize_model
 from agentguard.events import get_event_bus
 from agentguard.llm_mock import mock_enabled
 from agentguard.logging import get_logger
@@ -360,13 +360,26 @@ def get_remediation_source_context(
     return _source_snippets(manifest)
 
 
+class _LiteLLMBacked(LLM):
+    """A CrewAI LLM that always calls through LiteLLM, like the rest of AgentGuard.
+
+    For model strings such as anthropic/..., gemini/... or openai/..., CrewAI's LLM() switches to its
+    native SDK classes, which need extra SDK packages that are not installed and do not raise the
+    LiteLLM errors _patient understands. Before that change, building the reporter for an Anthropic
+    model raised ImportError. Skipping the native dispatch keeps one client path for every provider.
+    """
+
+    def __new__(cls, *args: Any, **kwargs: Any) -> "_LiteLLMBacked":
+        return object.__new__(cls)
+
+
 def build_crew(findings: dict[str, Any], scorecard: dict[str, Any],
                 manifest: Manifest | None = None,
                 model: Optional[str] = None,
                 project_path: Optional[str | Path] = None) -> Crew:
     chosen_model = normalize_model(model or get_config().reporter_model)
     logger.debug("Building CrewAI reporter crew using model: %s", chosen_model)
-    llm = _patient(LLM(model=chosen_model))
+    llm = _patient(_LiteLLMBacked(model=chosen_model, is_litellm=True, **litellm_kwargs(chosen_model)))
     mcps = _mcp_servers(project_path)
     mcp_repo_path = str(Path(project_path).resolve()) if project_path else ""
 

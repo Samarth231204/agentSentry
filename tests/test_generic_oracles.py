@@ -221,3 +221,146 @@ def test_key_format_messages_say_what_is_wrong():
         with pytest.raises(KeyInputError, match=words):
             validate_key(value)
     assert validate_key("  gsk_TESTONLY_0123456789  ") == "gsk_TESTONLY_0123456789"
+
+
+def test_unchosen_models_follow_the_only_configured_key(tmp_path, monkeypatch):
+    from agentguard.server.settings import SettingsIn, effective_config, write_settings
+    for env in ("GROQ_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "AGENTGUARD_ATTACKER_MODEL",
+                "AGENTGUARD_CHAT_MODEL", "AGENTGUARD_REPORTER_MODEL", "AGENTGUARD_FALLBACK_CHAIN"):
+        monkeypatch.delenv(env, raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-only")
+    cfg = effective_config(tmp_path)
+    assert cfg.attacker_model == cfg.chat_model == cfg.reporter_model == "anthropic/claude-haiku-5-5"
+    # an explicit choice is never replaced
+    (tmp_path / ".agentguard").mkdir()
+    write_settings(tmp_path, SettingsIn(**{"attacker_model": "groq/openai/gpt-oss-20b", "reporter_model": "anthropic/claude-haiku-5-5",
+                              "chat_model": "anthropic/claude-haiku-5-5", "max_probes": 3,
+                              "category_cooldown_seconds": 0, "target_timeout": 30, "fallback_chain": []}))
+    assert effective_config(tmp_path).attacker_model == "groq/openai/gpt-oss-20b"
+
+
+def test_quoted_keys_in_project_env_are_unquoted(tmp_path):
+    from agentguard.server.keys import read_keys
+    (tmp_path / ".agentguard").mkdir()
+    (tmp_path / ".agentguard" / ".env").write_text('ANTHROPIC_API_KEY="sk-ant-test-123456"\nOPENAI_API_KEY=\'sk-x-123456\'\n')
+    assert read_keys(tmp_path) == {"anthropic": "sk-ant-test-123456", "openai": "sk-x-123456"}
+
+
+def test_key_test_shows_the_providers_own_reason():
+    from agentguard.server.keys import provider_reason
+    exc = RuntimeError('litellm.BadRequestError: AnthropicException - {"type":"error","error":{"type":"invalid_request_error",'
+                       '"message":"This API key is not scoped to a workspace, so this request must include the header."}} sk-secret-1')
+    msg = provider_reason(exc, "sk-secret-1")
+    assert msg == "The provider rejected the request: This API key is not scoped to a workspace, so this request must include the header."
+    assert "sk-secret-1" not in provider_reason(RuntimeError("bad key sk-secret-1"), "sk-secret-1")
+
+
+def test_dashboard_pages_are_revalidated_but_hashed_chunks_are_cached():
+    from pathlib import Path
+    from agentguard.server.app import _cache_headers
+    assert _cache_headers(Path("/x/static/onboarding/index.html"))["Cache-Control"] == "no-cache"
+    assert "immutable" in _cache_headers(Path("/x/static/_next/static/chunks/page-abc.js"))["Cache-Control"]
+
+
+def test_anthropic_workspace_header_only_for_anthropic(monkeypatch):
+    from agentguard.config import header_kwargs
+    monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", '"wrkspc_test"')
+    assert header_kwargs("anthropic/claude-haiku-5-5") == {"extra_headers": {"anthropic-workspace-id": "wrkspc_test"}}
+    assert header_kwargs("claude-haiku-5-5") == {"extra_headers": {"anthropic-workspace-id": "wrkspc_test"}}
+    assert header_kwargs("groq/openai/gpt-oss-20b") == {}
+    monkeypatch.delenv("ANTHROPIC_WORKSPACE_ID")
+    assert header_kwargs("anthropic/claude-haiku-5-5") == {}
+
+
+def test_project_env_workspace_id_is_applied(tmp_path, monkeypatch):
+    import os
+    from agentguard.server.keys import apply_to_environ
+    monkeypatch.delenv("ANTHROPIC_WORKSPACE_ID", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    (tmp_path / ".agentguard").mkdir()
+    (tmp_path / ".agentguard" / ".env").write_text("ANTHROPIC_API_KEY=sk-ant-test-123456\nANTHROPIC_WORKSPACE_ID='wrkspc_x'\n")
+    apply_to_environ(tmp_path)
+    assert os.environ["ANTHROPIC_WORKSPACE_ID"] == "wrkspc_x"
+
+
+def test_reporter_llm_uses_litellm_for_anthropic(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-only")
+    monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "wrkspc_test")
+    from agentguard.reporters import build_crew
+    crew = build_crew({}, {}, None, model="anthropic/claude-haiku-5-5")
+    llm = crew.agents[0].llm
+    assert getattr(llm, "is_litellm", False)
+
+
+def test_every_call_drops_params_the_model_does_not_support(monkeypatch):
+    from agentguard import llm as llm_mod
+    seen = {}
+    monkeypatch.setattr(llm_mod.litellm, "completion", lambda **kw: seen.update(kw) or "ok")
+    monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "wrkspc_t")
+    llm_mod._completion_with_retry.__wrapped__("anthropic/claude-haiku-5-5", [{"role": "user", "content": "x"}], temperature=0.0)
+    assert seen["drop_params"] is True and seen["temperature"] == 0.0
+    assert seen["extra_headers"] == {"anthropic-workspace-id": "wrkspc_t"}
+
+
+def test_report_tolerates_model_shape_variations():
+    from agentguard.schemas import Report
+    r = Report(scorecard={}, findings=[], severity={"a": ["High", "because"]},
+               remediation={"a": {"fix": "x"}}, code_references={"app.py:5": "SYSTEM_PROMPT = ("})
+    assert r.code_references == {"app.py:5": ["SYSTEM_PROMPT = ("]}
+    assert r.severity["a"] == "High\nbecause" and '"fix"' in r.remediation["a"]
+
+
+def test_report_code_reference_objects_become_lines():
+    from agentguard.schemas import Report
+    r = Report(scorecard={}, findings=[], severity={}, remediation={},
+               code_references={"bank_tools/app.py": {"get_balance": "line 13"}})
+    assert r.code_references == {"bank_tools/app.py": ["get_balance: line 13"]}
+
+
+def test_chat_gives_a_reasoning_model_room_when_thinking_used_the_cap(monkeypatch):
+    from types import SimpleNamespace as NS
+    from agentguard import llm as llm_mod
+    calls = []
+
+    def fake(model, messages, **kw):
+        calls.append(kw["max_tokens"])
+        if kw["max_tokens"] < llm_mod.THINKING_ROOM:
+            return NS(choices=[NS(finish_reason="length", message=NS(content=None, tool_calls=None))], usage=None)
+        return NS(choices=[NS(finish_reason="stop", message=NS(content="SAFE", tool_calls=None))], usage=None)
+
+    monkeypatch.setattr(llm_mod, "_completion_with_retry", fake)
+    monkeypatch.setattr(llm_mod, "mock_enabled", lambda: False)
+    out = llm_mod.chat([{"role": "user", "content": "x"}], model="anthropic/claude-haiku-5-5", max_tokens=10)
+    assert calls == [10, llm_mod.THINKING_ROOM]
+    assert out["choices"][0]["message"]["content"] == "SAFE"
+
+
+def test_workspace_id_saved_with_key_shown_and_removed(tmp_path, monkeypatch):
+    import os
+    import pytest
+    from agentguard.server import keys
+    monkeypatch.delenv("ANTHROPIC_WORKSPACE_ID", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    with pytest.raises(keys.KeyInputError):
+        keys.save_key(tmp_path, "anthropic", None, "wrkspc_only")  # no key saved yet
+    out = keys.save_key(tmp_path, "anthropic", "sk-ant-test-123456", "wrkspc_01ABC")
+    assert out["configured"] and out["extra"]["value"] == "wrkspc_01ABC"
+    assert os.environ["ANTHROPIC_WORKSPACE_ID"] == "wrkspc_01ABC"
+    keys.save_key(tmp_path, "anthropic", None, "wrkspc_02")  # change only the workspace
+    assert keys.read_extras(tmp_path) == {"anthropic": "wrkspc_02"}
+    with pytest.raises(keys.KeyInputError):
+        keys.save_key(tmp_path, "anthropic", None, "bad value!")
+    with pytest.raises(keys.KeyInputError):
+        keys.save_key(tmp_path, "groq", "gsk_test_123456", "x")  # groq has no extra setting
+    keys.delete_key(tmp_path, "anthropic")
+    assert keys.read_extras(tmp_path) == {} and "ANTHROPIC_WORKSPACE_ID" not in os.environ
+
+
+def test_key_test_sends_a_typed_workspace_id(monkeypatch):
+    import litellm
+    from agentguard.server import keys
+    seen = {}
+    monkeypatch.setattr(litellm, "completion", lambda **kw: seen.update(kw) or type("R", (), {"choices": [1]})())
+    monkeypatch.delenv("ANTHROPIC_WORKSPACE_ID", raising=False)
+    assert keys.test_key("anthropic", "sk-ant-test-123456", "wrkspc_typed")["ok"]
+    assert seen["extra_headers"] == {"anthropic-workspace-id": "wrkspc_typed"}

@@ -34,3 +34,6 @@ USER_WORKFLOWS_GUIDE.md
 *PHASE*.md
 docs/internal/
 *.local.md
+
+# macOS
+.DS_Store

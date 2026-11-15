@@ -370,7 +370,7 @@ def synthesize(path: str | Path, use_llm: bool = True) -> Manifest:
                         context=context or "(none)",
                     ),
                 }],
-                max_tokens=10,
+                max_tokens=256,  # one word, but reasoning models think first
                 temperature=0.0,
             )
             verdict = resp["choices"][0]["message"]["content"].strip().upper()

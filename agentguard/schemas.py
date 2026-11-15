@@ -12,7 +12,7 @@ import uuid
 from enum import Enum
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, computed_field, field_validator
 
 
 class ProbeOutcome(str, Enum):
@@ -107,6 +107,38 @@ class Report(BaseModel):
     owasp: dict[str, str] = Field(default_factory=dict)            # finding id -> OWASP LLM Top 10 entry
     code_references: dict[str, list[str]] = Field(default_factory=dict)  # finding id -> ["file:line: code"]
     generated_by: str = "llm"  # "llm" or "deterministic_fallback"
+
+    # Models vary in how they shape these maps (a string where a list is expected, a list or object
+    # where a string is expected). The shape is not the content: normalise instead of discarding
+    # the whole LLM report over it.
+    @field_validator("code_references", mode="before")
+    @classmethod
+    def _refs_as_lists(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return {}
+        out: dict[str, list[str]] = {}
+        for key, refs in value.items():
+            if isinstance(refs, dict):
+                refs = [f"{k}: {_as_text(v)}" for k, v in refs.items()]
+            items = refs if isinstance(refs, list) else [refs]
+            out[str(key)] = [r if isinstance(r, str) else _as_text(r) for r in items if r not in (None, "")]
+        return out
+
+    @field_validator("severity", "remediation", "owasp", mode="before")
+    @classmethod
+    def _values_as_text(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return {}
+        return {str(k): v if isinstance(v, str) else _as_text(v) for k, v in value.items()}
+
+
+def _as_text(value: Any) -> str:
+    if isinstance(value, list):
+        return "\n".join(_as_text(v) for v in value)
+    if isinstance(value, dict):
+        import json
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
 
 
 class TargetProfile(BaseModel):

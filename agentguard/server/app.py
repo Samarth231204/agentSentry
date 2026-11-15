@@ -66,12 +66,14 @@ def _require_run(store: RunStore, run_id: str) -> Run:
 
 class KeyIn(BaseModel):
     provider: str = Field(max_length=32)
-    api_key: str = Field(max_length=600)
+    api_key: Optional[str] = Field(default=None, max_length=600)
+    extra: Optional[str] = Field(default=None, max_length=200)  # e.g. the Anthropic workspace ID
 
 
 class KeyTestIn(BaseModel):
     provider: str = Field(max_length=32)
     api_key: Optional[str] = Field(default=None, max_length=600)
+    extra: Optional[str] = Field(default=None, max_length=200)
 
 
 class RunIn(BaseModel):
@@ -104,6 +106,14 @@ def static_dashboard_ready() -> bool:
     return (STATIC_DIR / "index.html").is_file()
 
 
+def _cache_headers(file: Path) -> dict[str, str]:
+    """Pages must be revalidated: they name the content-hashed chunks of the current build, and a cached
+    page from an older AgentGuard keeps loading the old chunks after an upgrade. Hashed chunks never change."""
+    if "_next" in file.parts and "static" in file.parts:
+        return {"Cache-Control": "public, max-age=31536000, immutable"}
+    return {"Cache-Control": "no-cache"}
+
+
 def _static_file(path: str) -> FileResponse:
     """Maps URL paths to the exported pages: / -> index.html, /run -> run/index.html, ..."""
     rel = path.strip("/")
@@ -118,7 +128,7 @@ def _static_file(path: str) -> FileResponse:
         except OSError:
             continue
         if (resolved == STATIC_DIR.resolve() or STATIC_DIR.resolve() in resolved.parents) and resolved.is_file():
-            return FileResponse(resolved)
+            return FileResponse(resolved, headers=_cache_headers(resolved))
     not_found = STATIC_DIR / "404.html"
     if not_found.is_file():
         return FileResponse(not_found, status_code=404)
@@ -308,7 +318,7 @@ def create_app(
     def save_key(body: KeyIn, response: Response) -> dict[str, Any]:
         _no_store(response)
         try:
-            return keystore.save_key(Path(project_root), body.provider, body.api_key)
+            return keystore.save_key(Path(project_root), body.provider, body.api_key, body.extra)
         except keystore.KeyInputError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
@@ -322,7 +332,7 @@ def create_app(
                 raise HTTPException(status_code=400, detail="No key saved for this provider and none was given.")
             key = stored
         try:
-            return keystore.test_key(body.provider, key)
+            return keystore.test_key(body.provider, key, body.extra)
         except keystore.KeyInputError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 

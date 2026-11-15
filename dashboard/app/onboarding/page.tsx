@@ -128,7 +128,7 @@ function Onboarding() {
           <h1>Connect a model</h1>
           <p className="lead">
             AgentGuard uses a language model to plan the attacks and write the report. Paste one key to get
-            started. Groq has a free tier and is a good first choice.
+            started. Anthropic (Claude Haiku 5.5) is the best first choice.
           </p>
           {hasKey ? (
             <div className="banner ok">

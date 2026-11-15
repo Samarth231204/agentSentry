@@ -91,7 +91,8 @@ export default function SettingsPage() {
           <div key={p.id} className="key-item">
             <div className="key-row">
               <strong>{p.label}</strong>
-              <span className={`mono small ${p.configured ? "" : "muted"}`}>{p.configured ? p.masked : "not set"}</span>
+              <span className={`mono small ${p.configured ? "" : "muted"}`}>{p.configured ? p.masked : "not set"}
+                {p.configured && p.extra?.value ? ` · ${p.extra.label}: ${p.extra.value}` : ""}</span>
               <span className="controls" style={{ marginBottom: 0, justifyContent: "flex-end" }}>
                 <button type="button" onClick={() => setReplacing(replacing === p.id ? null : p.id)}>
                   {p.configured ? "Replace" : "Add"}

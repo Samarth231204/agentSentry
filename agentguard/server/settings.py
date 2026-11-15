@@ -64,7 +64,32 @@ def effective_config(project_root: Path) -> AgentGuardConfig:
         if not _MODEL_RE.match(str(name)):
             saved["fallback_chain"] = [m for m in saved["fallback_chain"] if _MODEL_RE.match(str(m))]
             break
-    return AgentGuardConfig.load(overrides=saved)
+    cfg = AgentGuardConfig.load(overrides=saved)
+    return _models_for_available_keys(cfg, saved)
+
+
+MODEL_FIELDS = {"attacker_model": "AGENTGUARD_ATTACKER_MODEL", "chat_model": "AGENTGUARD_CHAT_MODEL",
+                "reporter_model": "AGENTGUARD_REPORTER_MODEL"}
+
+
+def _models_for_available_keys(cfg: AgentGuardConfig, saved: dict[str, Any]) -> AgentGuardConfig:
+    """A model nobody chose (not in config.yaml, not in the environment) whose provider has no key
+    becomes the standard model of a provider that does have one.
+
+    The built-in defaults are Groq models. Without this, a user who connects only an Anthropic,
+    OpenAI or Gemini key keeps Groq models and every real run fails on authentication.
+    """
+    import os
+
+    from agentguard.config import has_credentials
+    from agentguard.server.keys import PROVIDERS
+
+    usable = [meta["test_model"] for meta in PROVIDERS.values() if os.environ.get(meta["env"])]
+    if not usable:
+        return cfg
+    updates = {field: usable[0] for field, env in MODEL_FIELDS.items()
+               if field not in saved and not os.environ.get(env) and not has_credentials(getattr(cfg, field))}
+    return cfg.model_copy(update=updates) if updates else cfg
 
 
 def current_settings(project_root: Path) -> dict[str, Any]:

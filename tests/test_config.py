@@ -15,7 +15,7 @@ def test_default_config(monkeypatch):
     assert config.source_snippet_max_chars == 1200
     assert config.target_timeout == 60.0
     assert config.litellm_retries == 5
-    assert "gpt-oss-20b" in config.attacker_model
+    assert config.attacker_model == "anthropic/claude-haiku-5-5"
 
 
 def test_config_env_override(monkeypatch):

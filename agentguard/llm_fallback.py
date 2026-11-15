@@ -15,7 +15,7 @@ from google.adk.models.base_llm import BaseLlm
 from google.adk.models.llm_response import LlmResponse
 from pydantic import Field
 
-from agentguard.config import normalize_model, usable_fallbacks
+from agentguard.config import litellm_kwargs, normalize_model, usable_fallbacks
 from agentguard.events import get_event_bus
 from agentguard.llm import (MAX_HINTED_WAIT, RETRYABLE_ERRORS, is_malformed_tool_call, mark_cooling,
                             output_limit_hint, retry_after_seconds, skip_cooling)
@@ -32,7 +32,7 @@ def _model_for(name: str, retries: int) -> BaseLlm:
     if mock_enabled():
         return ScriptedAttackerModel(model=name)
     from google.adk.models.lite_llm import LiteLlm
-    return LiteLlm(model=normalize_model(name), num_retries=retries)
+    return LiteLlm(model=normalize_model(name), num_retries=retries, **litellm_kwargs(name))
 
 
 def _with_model(llm_request: Any, model: str) -> Any:

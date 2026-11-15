@@ -164,7 +164,11 @@ function Overview({ run }: { run: RunDetail }) {
         ) : (
           <p className="muted">
             No LLM usage recorded for this run.
-            {usedBudgetFile ? "" : " This run predates budget tracking (findings.json was not written)."}
+            {usedBudgetFile
+              ? ""
+              : run.has_report
+                ? " This run predates budget tracking (findings.json was not written)."
+                : " Usage appears here when the attack step finishes."}
           </p>
         )}
       </Panel>

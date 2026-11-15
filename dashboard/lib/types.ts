@@ -138,6 +138,8 @@ export interface ProviderStatus {
   label: string;
   configured: boolean;
   masked: string | null;
+  /** Optional non-secret setting stored with the key (Anthropic: workspace ID). */
+  extra?: { field: string; label: string; help: string; value: string | null };
 }
 
 export interface SettingsResponse {

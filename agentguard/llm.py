@@ -22,7 +22,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from agentguard.config import get_config, normalize_model, usable_fallbacks
+from agentguard.config import get_config, litellm_kwargs, normalize_model, usable_fallbacks
 from agentguard.logging import get_logger
 
 logger = get_logger("llm")
@@ -163,7 +163,31 @@ _exponential = wait_exponential(multiplier=1.5, min=2, max=30)
 )
 def _completion_with_retry(model: str, messages: list[dict], **kwargs: Any) -> Any:
     logger.debug("Executing LiteLLM completion (model: %s)", model)
+    defaults = litellm_kwargs(model)
+    headers = {**defaults.pop("extra_headers", {}), **(kwargs.pop("extra_headers", None) or {})}
+    if headers:
+        kwargs["extra_headers"] = headers
+    kwargs = {**defaults, **kwargs}
     return litellm.completion(model=model, messages=messages, **kwargs)
+
+
+THINKING_ROOM = 4096  # max_tokens for the retry when reasoning used up a smaller cap
+
+
+def thinking_used_the_budget(resp: Any) -> bool:
+    """True when the reply was cut off by max_tokens before any visible text or tool call.
+
+    Reasoning models (Claude Haiku 5.5, gpt-oss, o-series) count their thinking against max_tokens;
+    with a small cap they stop with finish_reason=length and no content at all.
+    """
+    try:
+        choice = resp.choices[0]
+        msg = choice.message
+    except (AttributeError, IndexError, TypeError):
+        return False
+    return (getattr(choice, "finish_reason", None) == "length"
+            and not (getattr(msg, "content", None) or "").strip()
+            and not getattr(msg, "tool_calls", None))
 
 
 def chat(
@@ -216,6 +240,10 @@ def chat(
                     raise
                 # Too large for this provider's output limit: the same request with a smaller cap fits.
                 resp = _completion_with_retry(model=candidate, messages=messages, **{**call_kwargs, "max_tokens": fits})
+            if thinking_used_the_budget(resp) and call_kwargs["max_tokens"] < THINKING_ROOM:
+                # A reasoning model spent the whole cap thinking and wrote no answer: give it room once.
+                resp = _completion_with_retry(model=candidate, messages=messages,
+                                              **{**call_kwargs, "max_tokens": THINKING_ROOM})
             target_model = candidate
             if index > 0:
                 _emit_fallback(role, chain[0], candidate, "fallback after provider error")
