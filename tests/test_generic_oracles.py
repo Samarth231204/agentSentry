@@ -212,3 +212,12 @@ def test_repeating_a_retrieved_document_is_not_a_system_prompt_leak():
     secret_prompt = [{"args": {"messages": [{"role": "system", "content":
                      "You are Max and you must always greet users by saying welcome to the vault of Acme. " + doc}]}}]
     assert fingerprint_hit("you must always greet users by saying welcome to the vault", secret_prompt, [doc])
+
+
+def test_key_format_messages_say_what_is_wrong():
+    import pytest
+    from agentguard.server.keys import KeyInputError, validate_key
+    for value, words in (("", "Paste a key"), ("abc", "too short"), ("sk ant 123456789", "never has")):
+        with pytest.raises(KeyInputError, match=words):
+            validate_key(value)
+    assert validate_key("  gsk_TESTONLY_0123456789  ") == "gsk_TESTONLY_0123456789"

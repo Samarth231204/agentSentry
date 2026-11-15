@@ -40,8 +40,15 @@ def provider_or_raise(provider: str) -> dict[str, str]:
 
 def validate_key(api_key: str) -> str:
     key = (api_key or "").strip()
+    if not key:
+        raise KeyInputError("Paste a key first.")
+    if len(key) < 8:
+        raise KeyInputError("That is too short to be an API key. Paste the whole key from your provider's console.")
+    if len(key) > 512:
+        raise KeyInputError("That is too long to be an API key. Paste only the key itself.")
     if not _KEY_RE.match(key):
-        raise KeyInputError("The key has an unexpected format (only letters, digits and . _ - + / = : are allowed).")
+        raise KeyInputError("The key contains characters an API key never has (spaces or quotes, for example). "
+                            "Paste only the key itself.")
     return key
 
 
