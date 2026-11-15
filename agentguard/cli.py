@@ -371,7 +371,8 @@ def doctor() -> None:
         present = pid in stored or bool(_os.environ.get(meta["env"]))
         line(present, f"{meta['label']} key {'set' if present else 'not set'} (optional, one is needed for live runs)")
 
-    for port in (8787, 8790, 8791, 3000):
+    # 8787 dashboard and API, 8790/8791 the two MCP servers. Port 3000 is only for dashboard development.
+    for port in (8787, 8790, 8791):
         with _socket.socket() as s:
             busy = s.connect_ex(("127.0.0.1", port)) == 0
         line(not busy, f"port {port} free", "something is already listening; stop it or pick another port")
