@@ -35,48 +35,28 @@ This manual guides you through installing AgentGuard, instrumenting your AI agen
 
 ## 2. Installation & Setup
 
-### Step 1: Clone the Repository
+### Step 1: Clone AgentGuard into your project
 
 ```bash
-git clone https://github.com/<your-username>/agentguard.git
-cd agentguard
+cd your-project
+git clone https://github.com/<your-username>/agentguard.git AgentGuard
 ```
 
-### Step 2: Create a Virtual Environment
-
-It is strongly recommended to use an isolated Python virtual environment:
-
-**Linux / macOS:**
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-**Windows (PowerShell):**
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-```
-
-**Windows (Command Prompt):**
-```cmd
-python -m venv .venv
-.venv\Scripts\activate.bat
-```
-
-### Step 3: Install AgentGuard
-
-Install AgentGuard in editable mode with all dependencies:
+### Step 2: Run it
 
 ```bash
-pip install -e .
+./AgentGuard/run
 ```
 
-Verify that the CLI is accessible:
+The first run creates AgentGuard's Python environment in `AgentGuard/.venv`, installs AgentGuard and your project's
+`requirements.txt`, and adds `AgentGuard/` and `.agentguard/` to your project's `.gitignore`. Then it starts AgentGuard
+and opens the dashboard. Later runs start straight away. Stop it with Ctrl+C.
 
-```bash
-agentguard --help
-```
+- Test one sub-folder of a larger repository: `./AgentGuard/run path/to/agent`
+- Other options go to `agentguard up`: `./AgentGuard/run --port 8800 --no-browser`
+- The CLI is at `AgentGuard/.venv/bin/agentguard` for the commands in section 6.
+
+Windows: run it from Git Bash or WSL.
 
 ---
 

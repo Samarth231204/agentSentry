@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { runPath } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
-import type { Finding, ReportPayload, RunDetail } from "@/lib/types";
+import type { EvidencePayload, Finding, ReportPayload, RunDetail } from "@/lib/types";
 import { formatNumber, formatTime, pct, titleCase } from "@/lib/format";
 import { Bar, Panel, ErrorBox, Loading, Tile } from "@/components/ui";
 import { FindingsTable } from "@/components/Findings";
@@ -12,8 +12,9 @@ import { TraceView } from "@/components/Trace";
 import { ReportMarkdown } from "@/components/ReportMarkdown";
 import { RunProgress } from "@/components/RunProgress";
 import { PlanReview } from "@/components/PlanReview";
+import { EvidenceView } from "@/components/Evidence";
 
-const TABS = ["overview", "plan", "findings", "report", "trace", "manifest"] as const;
+const TABS = ["overview", "evidence", "plan", "findings", "report", "trace"] as const;
 type Tab = (typeof TABS)[number];
 
 export function RunView() {
@@ -58,11 +59,11 @@ export function RunView() {
       </nav>
 
       {tab === "overview" ? <Overview run={run} /> : null}
+      {tab === "evidence" ? <EvidencePanel runId={runId} /> : null}
       {tab === "plan" ? <PlanReview runId={runId} /> : null}
       {tab === "findings" ? <FindingsPanel runId={runId} /> : null}
       {tab === "report" ? <ReportPanel runId={runId} /> : null}
       {tab === "trace" ? <TraceView runId={runId} /> : null}
-      {tab === "manifest" ? <ManifestPanel runId={runId} /> : null}
     </>
   );
 }
@@ -279,20 +280,10 @@ function ReportPanel({ runId }: { runId: string }) {
   );
 }
 
-function ManifestPanel({ runId }: { runId: string }) {
-  const manifest = useApi<{ manifest: Record<string, unknown> | null }>(runPath(runId, "/manifest"));
-  if (manifest.loading) return <Loading what="Loading manifest" />;
-  if (manifest.error) return <ErrorBox message={manifest.error} />;
-  if (!manifest.data?.manifest) {
-    return (
-      <Panel>
-        <p className="muted">No manifest.yaml for this run. Create one with <code>agentguard init PROJECT</code>.</p>
-      </Panel>
-    );
-  }
-  return (
-    <Panel title="Manifest">
-      <pre>{JSON.stringify(manifest.data.manifest, null, 2)}</pre>
-    </Panel>
-  );
+function EvidencePanel({ runId }: { runId: string }) {
+  const evidence = useApi<EvidencePayload>(runPath(runId, "/evidence"));
+  if (evidence.loading) return <Loading what="Loading evidence" />;
+  if (evidence.error) return <ErrorBox message={evidence.error} />;
+  if (!evidence.data) return null;
+  return <EvidenceView evidence={evidence.data} />;
 }

@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# AgentGuard: one command to set up and start.
+#
+#   cd your-project
+#   git clone <AgentGuard repo> AgentGuard
+#   ./AgentGuard/run
+#
+# The project tested is the folder that contains this AgentGuard clone. The first run
+# creates AgentGuard's Python environment, installs it and your project's requirements,
+# and keeps AgentGuard out of your project's git. Later runs skip what is already done.
+# Then the dashboard opens in your browser. Stop it with Ctrl+C.
+#
+# Test a sub-folder instead (e.g. one app of several):   ./AgentGuard/run path/to/app
+# Other options go to `agentguard up`:                   ./AgentGuard/run --port 8800 --no-browser
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TARGET="${AGENTGUARD_PROJECT:-$HERE/..}"
+if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
+  [ -d "$1" ] || { echo "Error: $1 is not a folder." >&2; exit 1; }
+  TARGET="$1"; shift
+fi
+PROJECT="$(cd "$TARGET" && pwd)"
+VENV="$HERE/.venv"
+STATE="$VENV/.agentguard-setup"
+
+say() { printf '\033[1m==>\033[0m %s\n' "$*"; }
+fail() { printf '\033[31mError:\033[0m %s\n' "$*" >&2; exit 1; }
+
+fingerprint() {  # changes when the file changes, so edits trigger a reinstall
+  if command -v shasum >/dev/null 2>&1; then shasum "$@" 2>/dev/null | shasum | cut -c1-16
+  else sha1sum "$@" 2>/dev/null | sha1sum | cut -c1-16; fi
+}
+
+pick_python() {
+  for py in "${PYTHON:-}" python3.13 python3.12 python3.11 python3.10 python3; do
+    [ -n "$py" ] || continue
+    if command -v "$py" >/dev/null 2>&1 &&
+       "$py" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+      echo "$py"; return 0
+    fi
+  done
+  return 1
+}
+
+[ "$PROJECT" != "$HERE" ] || fail "Clone AgentGuard inside your project folder and run ./AgentGuard/run from there."
+
+# 1. AgentGuard's own environment
+if [ ! -x "$VENV/bin/python" ]; then
+  PY="$(pick_python)" || fail "Python 3.10 or newer is needed. Install it from https://www.python.org/downloads/"
+  say "Creating AgentGuard's Python environment ($("$PY" --version))"
+  "$PY" -m venv "$VENV"
+fi
+touch "$STATE"
+
+AG_PRINT="$(fingerprint "$HERE/pyproject.toml")"
+if ! grep -qx "agentguard=$AG_PRINT" "$STATE"; then
+  say "Installing AgentGuard (first run takes a few minutes)"
+  "$VENV/bin/python" -m pip install --quiet --upgrade pip
+  "$VENV/bin/python" -m pip install --quiet -e "$HERE"
+  grep -v '^agentguard=' "$STATE" > "$STATE.tmp" || true
+  echo "agentguard=$AG_PRINT" >> "$STATE.tmp"; mv "$STATE.tmp" "$STATE"
+fi
+
+# 2. Your project's requirements: your agent runs inside AgentGuard's environment
+REQS=()
+for f in "$PROJECT"/requirements.txt "$PROJECT"/requirements/*.txt; do
+  [ -f "$f" ] && REQS+=("$f")
+done
+if [ ${#REQS[@]} -gt 0 ]; then
+  REQ_PRINT="$(fingerprint "${REQS[@]}")"
+  if ! grep -qx "project=$REQ_PRINT" "$STATE"; then
+    say "Installing your project's requirements: ${REQS[*]#"$PROJECT"/}"
+    args=(); for f in "${REQS[@]}"; do args+=(-r "$f"); done
+    if "$VENV/bin/python" -m pip install --quiet "${args[@]}"; then
+      grep -v '^project=' "$STATE" > "$STATE.tmp" || true
+      echo "project=$REQ_PRINT" >> "$STATE.tmp"; mv "$STATE.tmp" "$STATE"
+    else
+      echo "Warning: some of your project's requirements did not install. Your agent may fail to start." >&2
+    fi
+  fi
+fi
+
+# 3. Keep AgentGuard out of your project's git (safe to repeat)
+if ! grep -qx "bootstrapped=$PROJECT" "$STATE"; then
+  "$VENV/bin/agentguard" bootstrap --project "$PROJECT" | grep -v "^Next:" || true
+  echo "bootstrapped=$PROJECT" >> "$STATE"
+fi
+
+# 4. Start
+say "Starting AgentGuard for $PROJECT"
+exec "$VENV/bin/agentguard" up --project "$PROJECT" "$@"

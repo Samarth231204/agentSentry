@@ -254,3 +254,18 @@ pre code { background: none; padding: 0; }
   th, td { padding: 7px 8px; font-size: 13px; }
   .stepper li { font-size: 11px; }
 }
+
+/* ---------- evidence ---------- */
+.evidence-card { border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; margin: 14px 0; background: var(--panel); }
+.evidence-card h3 { margin: 18px 0 8px; font-size: 14px; }
+.evidence-head { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.part-chip { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; background: #fdf0f0; color: var(--error); border: 1px solid #efc4c4; margin: 2px 4px 2px 0; }
+.code-block { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin: 8px 0 14px; }
+.code-block .code-title { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; padding: 6px 10px; background: var(--code-bg); border-bottom: 1px solid var(--border); font-size: 12px; }
+.code-block .code-body { overflow-x: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; line-height: 1.55; }
+.code-block .code-line { display: flex; white-space: pre; }
+.code-block .code-line .ln { flex: 0 0 auto; width: 3.5em; text-align: right; padding-right: 10px; color: var(--muted); user-select: none; }
+.code-block .code-line.hl { background: #fff4d6; }
+.code-block .code-line.hl .ln { color: var(--suspected); font-weight: 600; }
+.code-block .code-why { padding: 6px 10px; font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--border); }
+.turn.attack-turn pre.tool-call { color: var(--error); font-weight: 600; }

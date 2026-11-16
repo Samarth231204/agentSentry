@@ -136,7 +136,7 @@ function Onboarding() {
               in Settings.
             </div>
           ) : (
-            <div className="banner warn">No model key yet. You can still run a demo check in the next step.</div>
+            <div className="banner warn">No model key yet. AgentGuard needs one to run a test.</div>
           )}
           <KeyForm providers={settings.data.providers} onSaved={settings.refetch} />
           <div className="controls" style={{ marginTop: 18 }}>
@@ -148,32 +148,19 @@ function Onboarding() {
 
       {step === 3 ? (
         <section className="panel">
-          <h1>Run your first check</h1>
-          <p className="lead">Pick one. You can run both.</p>
+          <h1>Run your first test</h1>
+          <p className="lead">Start a test of your agent.</p>
           <div className="card-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))" }}>
-            <div className="card">
-              <span className="icon">▶</span>
-              <h3>Demo check</h3>
-              <p>
-                Runs the whole pipeline in about 10 seconds with no model calls. Use it to see how a run looks. It
-                says nothing about your agent's security.
-              </p>
-              <div className="controls" style={{ marginTop: 10, marginBottom: 0 }}>
-                <button type="button" className={hasKey ? "secondary" : undefined} onClick={() => finish("/new?mock=1")}>
-                  Start demo check
-                </button>
-              </div>
-            </div>
             <div className={`card ${hasKey ? "" : "disabled"}`}>
               <span className="icon">🔍</span>
-              <h3>Real test</h3>
+              <h3>Test your agent</h3>
               <p>
                 Attacks your agent with the model you connected. Takes a few minutes and uses some of your model
                 quota. You approve the watch plan before anything runs.
               </p>
               <div className="controls" style={{ marginTop: 10, marginBottom: 0 }}>
                 {hasKey ? (
-                  <button type="button" onClick={() => finish("/new")}>Start real test</button>
+                  <button type="button" onClick={() => finish("/new")}>Start test</button>
                 ) : (
                   <span className="small muted">Connect a model in the previous step first.</span>
                 )}

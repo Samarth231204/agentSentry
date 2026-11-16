@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 
 from agentguard import __version__
+from agentguard.evidence import build_evidence
 from agentguard.server import keys as keystore
 from agentguard.server.runner import RunBusy, RunManager, RunRejected, RunSpec
 from agentguard.server.settings import SettingsIn, current_settings, write_settings
@@ -83,7 +84,6 @@ class RunIn(BaseModel):
     max_probes: Optional[int] = Field(default=None, ge=1, le=50)
     max_llm_calls: Optional[int] = Field(default=None, ge=1, le=100000)
     max_tokens: Optional[int] = Field(default=None, ge=1, le=100000000)
-    mock: bool = False
     review_plan: bool = True
     replay_run_id: Optional[str] = Field(default=None, max_length=80)
     use_a2a: bool = False
@@ -214,6 +214,11 @@ def create_app(
             "markdown": store.report_markdown(run),
             "json": store.report_json(run),
         }
+
+    @app.get("/api/runs/{run_id}/evidence")
+    def get_evidence(run_id: str) -> dict[str, Any]:
+        run = _require_run(store, run_id)
+        return build_evidence(Path(project_root), run.path, store.findings(run))
 
     @app.get("/api/runs/{run_id}/manifest")
     def get_manifest(run_id: str) -> dict[str, Any]:
@@ -355,7 +360,6 @@ def create_app(
             max_probes=body.max_probes,
             max_llm_calls=body.max_llm_calls,
             max_tokens=body.max_tokens,
-            mock=body.mock,
             review_plan=body.review_plan,
             replay_run_id=body.replay_run_id or None,
             use_a2a=body.use_a2a,

@@ -1,8 +1,8 @@
 "use client";
 
-import { FormEvent, Suspense, useEffect, useState } from "react";
+import { FormEvent, Suspense, useState } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { postJSON, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import type { RunStatus, SettingsResponse } from "@/lib/types";
@@ -20,10 +20,8 @@ export default function NewRunPage() {
 
 function NewRunForm() {
   const router = useRouter();
-  const params = useSearchParams();
   const settings = useApi<SettingsResponse>("/api/settings");
 
-  const [demo, setDemo] = useState(false);
   const [mode, setMode] = useState<Mode>("auto");
   const [reviewPlan, setReviewPlan] = useState(true);
   const [targetApp, setTargetApp] = useState("app:app");
@@ -37,11 +35,6 @@ function NewRunForm() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Onboarding links here with ?mock=1 for the demo check.
-  useEffect(() => {
-    if (params.get("mock") === "1") setDemo(true);
-  }, [params]);
-
   if (settings.loading) return <Loading what="Loading" />;
   if (settings.error) return <ErrorBox message={`Could not reach the backend: ${settings.error}`} />;
 
@@ -50,8 +43,8 @@ function NewRunForm() {
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!demo && !hasKey) {
-      setError("Connect a model key first (Get started → Model), or choose the demo check.");
+    if (!hasKey) {
+      setError("Connect a model key first in Settings.");
       return;
     }
     setBusy(true);
@@ -64,7 +57,6 @@ function NewRunForm() {
       max_probes: optionalInt(maxProbes),
       max_llm_calls: optionalInt(maxCalls),
       max_tokens: optionalInt(maxTokens),
-      mock: demo,
       replay_run_id: replayRunId.trim() || undefined,
       use_a2a: useA2a,
     };
@@ -88,29 +80,14 @@ function NewRunForm() {
       </div>
 
       <form onSubmit={submit} className="stack">
-        <section className="panel">
-          <h2 style={{ marginTop: 0 }}>1. Choose the kind of test</h2>
-          <div className="card-grid" style={{ marginTop: 0 }}>
-            <label className={`card selectable ${!demo ? "selected" : ""} ${!hasKey ? "disabled" : ""}`}>
-              <span className="form-row" style={{ alignItems: "center" }}>
-                <input type="radio" name="kind" checked={!demo} onChange={() => setDemo(false)} />
-                <strong>Real test</strong>
-              </span>
-              <p>Attacks your agent with your connected model. Takes a few minutes.</p>
-              {!hasKey ? <p style={{ color: "var(--error)" }}>Needs a model key. Add one in Settings.</p> : null}
-            </label>
-            <label className={`card selectable ${demo ? "selected" : ""}`}>
-              <span className="form-row" style={{ alignItems: "center" }}>
-                <input type="radio" name="kind" checked={demo} onChange={() => setDemo(true)} />
-                <strong>Demo check</strong>
-              </span>
-              <p>Runs the full pipeline with no model calls, in about 10 seconds. Proves the setup works. Says nothing about security.</p>
-            </label>
+        {!hasKey ? (
+          <div className="banner warn">
+            A test needs a model key. <Link href="/settings">Add one in Settings</Link>, then come back.
           </div>
-        </section>
+        ) : null}
 
         <section className="panel">
-          <h2 style={{ marginTop: 0 }}>2. Your agent</h2>
+          <h2 style={{ marginTop: 0 }}>Your agent</h2>
           <p className="small muted">
             AgentGuard reads your project to find the functions that take user input and the tools the agent can
             call. It starts your agent with those points watched. Your files are not edited.
@@ -187,8 +164,8 @@ function NewRunForm() {
 
         {error ? <div className="banner error">{error}</div> : null}
         <div className="controls">
-          <button type="submit" disabled={busy || (!demo && !hasKey)}>
-            {busy ? "Starting…" : demo ? "Start demo check" : "Start test"}
+          <button type="submit" disabled={busy || !hasKey}>
+            {busy ? "Starting…" : "Start test"}
           </button>
           <Link href="/" className="btn secondary">Cancel</Link>
         </div>

@@ -12,26 +12,28 @@ Requirements: Python 3.10+, `git`, and [uv](https://docs.astral.sh/uv/) (for Sem
 
 ```bash
 cd your-project
-git clone <this repository> agentguard           # one folder inside your project
-./agentguard/bootstrap.sh                        # venv, install, keep AgentGuard out of git
-./agentguard/.venv/bin/agentguard doctor         # what is set up, what is missing
-./agentguard/.venv/bin/agentguard up             # starts the backend and opens the dashboard
+git clone <this repository> AgentGuard           # one folder inside your project
+./AgentGuard/run                                 # sets up on first run, then opens the dashboard
 ```
+
+`run` does everything: the first time, it creates AgentGuard's own Python environment, installs AgentGuard and your
+project's `requirements.txt` (your agent runs inside that environment), and adds `AgentGuard/` and `.agentguard/` to
+your project's `.gitignore`. Later runs skip what is already done and start straight away. Stop it with Ctrl+C.
+To test one sub-folder of a larger repo, pass it: `./AgentGuard/run path/to/agent`.
 
 In the dashboard:
 
-1. **Set up key** — paste an API key once (Anthropic is recommended; Groq, OpenAI, Gemini and OpenRouter also work). It is saved to
-   `<your-project>/.agentguard/.env` with mode 600, and the browser never keeps it. Test it with one tiny request.
-2. **New run** — leave "Automatic" selected and keep "Review the plan" ticked. Click **Run**.
+1. **Get started** — paste an API key once (Anthropic is recommended; add the Workspace ID if your key needs one). It is
+   saved to `<your-project>/.agentguard/.env` with mode 600, and the browser never keeps it. Test it with one tiny request.
+2. **New test** — keep "Review the plan" ticked and click **Start test**.
 3. **Plan** — untick anything that should not be watched. Tools that change state are sandboxed (recorded, not executed).
    Approve.
-4. **Watch the run** — progress, the live trace, and the MCP panel. When it finishes, open the findings and the report.
-
-Want no spend while you look around? Tick **Mock mode** on the New run page. It runs the whole pipeline with no provider
-calls. Mock results prove plumbing only, not vulnerability.
+4. **Evidence** — when the run finishes, this tab shows each attack that got through, the part of your agent it got
+   through (a tool, the system prompt, retrieval, memory), the attack conversation, and the vulnerable lines of your code.
 
 ## What you get
 
+- Evidence: the vulnerable parts of your agent per attack, the attack logs that prove it, and the real code behind it.
 - Findings with status (confirmed, suspected, failed, error), the oracle that decided, and the verbatim transcript.
 - A report with severity, remediation, OWASP LLM Top 10 mapping and `file:line` code references.
 - A trace of every model call, tool call, MCP call, A2A call and phase, with token usage and budgets.
@@ -51,7 +53,7 @@ calls. Mock results prove plumbing only, not vulnerability.
 | Python 3.10+ | everything | system or pyenv |
 | `uv` | Semgrep's MCP server (optional but recommended) | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 | Semgrep binary | sink evidence (optional) | `uv tool install "semgrep==1.135.0" --with setuptools` |
-| An API key | live runs (not mock mode) | paste it in **Set up key** |
+| An API key | every test | paste it in **Get started** or **Settings** |
 | Node 20+ | only to develop the dashboard | `scripts/build_dashboard.sh` rebuilds the bundle |
 | Free ports 8787, 8790, 8791 | backend and MCP servers | `agentguard doctor` checks them |
 
@@ -60,7 +62,7 @@ calls. Mock results prove plumbing only, not vulnerability.
 - Dashboard: `dashboard/` (Next.js, TypeScript). `npm run dev` runs it against `NEXT_PUBLIC_AGENTGUARD_API`.
   The built bundle is committed under `agentguard/server/static/`; rebuild it with `scripts/build_dashboard.sh`
   after dashboard changes.
-- Tests: `python -m pytest -q` (about 250 tests, mock-based and no network, except the Semgrep test which is skipped when
+- Tests: `python -m pytest -q` (about 300 tests, mock-based and no network, except the Semgrep test which is skipped when
   Semgrep is missing).
 - Docs: [architecture](docs/architecture.md), [design patterns](docs/design-patterns.md), [MCP](docs/mcp.md),
   [A2A](docs/a2a.md), [implementation plan](IMPLEMENTATION_PLAN.md) (local only).

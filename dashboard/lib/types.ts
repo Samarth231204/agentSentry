@@ -213,3 +213,43 @@ export interface PlanResponse {
   plan: { project_root: string; created: number; items: PlanItem[] };
   candidates: DiscoveryCandidate[];
 }
+
+// GET /api/runs/{id}/evidence (agentguard/evidence.py)
+export interface CodeLine {
+  n: number;
+  text: string;
+}
+
+export interface CodeLocation {
+  file: string;
+  start_line: number;
+  end_line: number;
+  highlight: number[];
+  lines: CodeLine[];
+  why: string;
+  part: string | null;
+  origin: "located" | "report";
+}
+
+export interface EvidenceFinding {
+  id: string;
+  category: string;
+  status: Status;
+  oracle: string | null;
+  oracle_detail: string | null;
+  confidence: number | null;
+  capability_targeted: string | null;
+  severity: string | null;
+  remediation: string | null;
+  owasp: string | null;
+  turns: Turn[];
+  parts: string[];
+  code: CodeLocation[];
+}
+
+export interface EvidencePayload {
+  total_attempts: number;
+  vulnerable: number;
+  by_category: Record<string, { findings: number; confirmed: number; parts: string[] }>;
+  findings: EvidenceFinding[];
+}
