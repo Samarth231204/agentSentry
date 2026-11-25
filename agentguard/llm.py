@@ -36,6 +36,40 @@ def extra_headers() -> dict[str, str]:
     return {"anthropic-workspace-id": ws} if ws and model_name().startswith("anthropic/") else {}
 
 
+def _patch_litellm_workspace_header() -> None:
+    """Some calls reach LiteLLM without our headers (CrewAI's Instructor-based structured-output
+    fallback). Every Anthropic call made in this process gets the workspace header."""
+    ws = os.environ.get("ANTHROPIC_WORKSPACE_ID", "").strip()
+    if not ws:
+        return
+    try:
+        import litellm
+    except ImportError:
+        return
+    if getattr(litellm, "_agentguard_ws", False):
+        return
+
+    def add(kwargs: dict) -> dict:
+        model = str(kwargs.get("model", ""))
+        if model.startswith("anthropic/") or model.startswith("claude-"):
+            kwargs["extra_headers"] = {**(kwargs.get("extra_headers") or {}), "anthropic-workspace-id": ws}
+        return kwargs
+
+    sync, async_ = litellm.completion, litellm.acompletion
+
+    def completion(*args: Any, **kwargs: Any):
+        return sync(*args, **add(kwargs))
+
+    async def acompletion(*args: Any, **kwargs: Any):
+        return await async_(*args, **add(kwargs))
+
+    litellm.completion, litellm.acompletion = completion, acompletion
+    litellm._agentguard_ws = True
+
+
+_patch_litellm_workspace_header()
+
+
 def crew_llm(max_tokens: int = 4096, react_text: bool = True):
     """A CrewAI LLM that calls through LiteLLM.
 
@@ -53,6 +87,16 @@ def crew_llm(max_tokens: int = 4096, react_text: bool = True):
     class _LiteLLMBacked(LLM):
         def __new__(cls, *args: Any, **kwargs: Any) -> "_LiteLLMBacked":
             return object.__new__(cls)
+
+        # CrewAI sends response_model to Instructor, which forces a tool choice; Claude 5.5 models reject
+        # forced tool use. Without it CrewAI asks for JSON in the text and validates it with Pydantic.
+        def call(self, *args: Any, **kwargs: Any) -> Any:
+            kwargs.pop("response_model", None)
+            return super().call(*args, **kwargs)
+
+        async def acall(self, *args: Any, **kwargs: Any) -> Any:
+            kwargs.pop("response_model", None)
+            return await super().acall(*args, **kwargs)
 
         def supports_function_calling(self) -> bool:
             # react_text: CrewAI then runs the classic text ReAct loop (Thought / Action /

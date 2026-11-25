@@ -59,18 +59,21 @@ def list_runs(project: str | Path) -> list[dict]:
 
 
 def checkpoints(run_dir: Path) -> list[dict]:
-    """The run's CrewAI checkpoints, newest first: id, time, and which entity (flow or crew) was saved."""
+    """The run's CrewAI checkpoints (main flow and review crew), newest first."""
     import sqlite3
 
-    db = run_dir / "checkpoints.db"
-    if not db.exists():
-        return []
-    try:
-        with sqlite3.connect(db) as conn:
-            rows = conn.execute("SELECT id, created_at, parent_id FROM checkpoints ORDER BY created_at DESC, rowid DESC").fetchall()
-    except sqlite3.Error:
-        return []
-    return [{"id": i, "created_at": c, "parent_id": p} for i, c, p in rows]
+    out = []
+    for name, owner in (("checkpoints.db", "flow"), ("review_checkpoints.db", "review crew")):
+        db = run_dir / name
+        if not db.exists():
+            continue
+        try:
+            with sqlite3.connect(db) as conn:
+                rows = conn.execute("SELECT id, created_at, parent_id FROM checkpoints").fetchall()
+        except sqlite3.Error:
+            continue
+        out += [{"id": i, "created_at": c, "parent_id": p, "owner": owner} for i, c, p in rows]
+    return sorted(out, key=lambda r: str(r["created_at"]), reverse=True)
 
 
 def adk_sessions(run_dir: Path) -> list[dict]:
@@ -111,7 +114,8 @@ def get_run(project: str | Path, run_id: str) -> Optional[dict]:
     if meta is None:
         return None
     return {**meta, "scan": read_json(d / "scan.json"), "search": read_json(d / "search.json"),
-            "attacks": read_json(d / "attacks.json"), "checkpoints": checkpoints(d), "adk": adk_sessions(d)}
+            "attacks": read_json(d / "attacks.json"), "report": read_json(d / "report.json"),
+            "eval": read_json(d / "eval.json"), "checkpoints": checkpoints(d), "adk": adk_sessions(d)}
 
 
 def mark_orphans(project: str | Path) -> None:
@@ -159,10 +163,13 @@ def start_run(project: str | Path, background: bool = True, resume: Optional[str
             if event.event_type == "step_started":
                 _write(run_dir, step=event.payload.get("step"))
             elif event.event_type == "usage":
-                key = "usage_attack" if event.source == "attack" else "usage"
+                key = {"attack": "usage_attack", "review": "usage_review"}.get(event.source, "usage")
                 _write(run_dir, **{key: event.payload})
             elif event.event_type == "step_done" and event.payload.get("step") == "attack":
                 _write(run_dir, attack={k: event.payload.get(k) for k in ("confirmed", "suspected", "resisted", "probes")})
+            elif event.event_type == "step_done" and event.payload.get("step") == "report":
+                _write(run_dir, report={k: event.payload.get(k) for k in
+                                        ("overall_risk", "total_usd", "total_seconds", "qa_approved", "detection_rate")})
         bus.subscribe(track)
         from agentguard.observability import make_sink
         tracer = make_sink(run_id, str(project))

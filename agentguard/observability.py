@@ -3,9 +3,11 @@
 On when LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY are set in AgentGuard/.env (LANGFUSE_HOST defaults
 to https://cloud.langfuse.com). trace.jsonl stays the local record either way.
 
-Trace layout:  run  ->  one span per step (scan, search, attack)
-                        -> generations for model calls (with token usage)
-                        -> spans for tool calls and probes, events for guardrail hits and errors
+Trace layout:  run  ->  one span per step (scan, search, attack, review, report)
+                        -> generations for model calls, with token usage and cost (agentguard/costs.py)
+                        -> spans for tool calls, probes and A2A calls; events for guardrail hits and errors
+                        -> scores: confirmed, suspected, probes, cost_usd, seconds, qa_approved, and on a
+                           test project detection_rate and false_alarms (agentguard/evals.py)
 """
 
 from __future__ import annotations
@@ -53,10 +55,26 @@ class LangfuseSink:
         elif t == "step_done" and self.current is not None:
             self.current.update(output=p)
         elif t == "llm_call":
+            from agentguard.costs import price_of
+            pin, pout = price_of(p.get("model") or "")
+            tin, tout = p.get("prompt_tokens") or 0, p.get("completion_tokens") or 0
             gen = self._parent().start_generation(
-                name=f"{e.source}:{p.get('category', 'search')}", model=p.get("model"),
-                usage_details={"input": p.get("prompt_tokens") or 0, "output": p.get("completion_tokens") or 0})
+                name=f"{e.source}:{p.get('category') or p.get('agent') or 'search'}", model=p.get("model"),
+                usage_details={"input": tin, "output": tout},
+                cost_details={"input": tin / 1e6 * pin, "output": tout / 1e6 * pout})
             gen.end()
+        elif t == "a2a_call":
+            key = f"a2a:{p.get('url')}:{p.get('skill')}"
+            self.pending_tool[key] = self._parent().start_span(name=f"a2a:{p.get('skill')}", input=p)
+        elif t == "a2a_result":
+            span = self.pending_tool.pop(f"a2a:{p.get('url')}:{p.get('skill')}", None)
+            if span is not None:
+                span.update(output=p)
+                span.end()
+        elif t == "eval_scores":
+            for name, value in (p.get("scores") or {}).items():
+                if value is not None:
+                    self.root.score_trace(name=name, value=float(value))
         elif t == "action":
             key = f"{e.source}:{p.get('category', '')}:{p.get('tool')}"
             self.pending_tool[key] = self._parent().start_span(name=f"tool:{p.get('tool')}", input=p.get("input"),
@@ -74,7 +92,8 @@ class LangfuseSink:
                                 "confirmed": p.get("confirmed"), "detail": p.get("detail")})
             span.end()
         elif t in ("blocked", "injection_in_observation", "bad_tool_output", "search_result_check", "error",
-                   "category_done", "thought"):
+                   "category_done", "thought", "retest_requested", "retest_done", "qa_result", "trap_hit",
+                   "page_planted", "eval_dataset", "cost_line"):
             self._parent().create_event(name=f"{e.source}:{t}", metadata=p)
         elif t in ("run_done",):
             self.close(p)

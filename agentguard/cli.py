@@ -61,3 +61,20 @@ def scan(project: str) -> None:
 
 if __name__ == "__main__":
     main()
+
+
+@main.command("a2a-attack")
+@click.option("--host", default="0.0.0.0", show_default=True)
+def a2a_attack(host: str) -> None:
+    """Serve the ADK attack team as an A2A service (port from AGENTGUARD_A2A_ATTACK_URL)."""
+    from agentguard.a2a.servers import serve_forever
+    serve_forever("attack", host)
+
+
+@main.command("a2a-review")
+@click.option("--host", default="0.0.0.0", show_default=True)
+def a2a_review(host: str) -> None:
+    """Serve the CrewAI review crew as an A2A service (port from AGENTGUARD_A2A_REVIEW_URL)."""
+    from agentguard.a2a.servers import serve_forever
+    serve_forever("review", host)
+

@@ -62,6 +62,7 @@ th { font-size: 12px; color: var(--muted); font-weight: 600; }
 .high { color: var(--high); background: var(--high-soft); }
 .medium { color: var(--med); background: var(--med-soft); }
 .low { color: var(--low); background: var(--low-soft); }
+.info { color: var(--muted); background: var(--code); }
 .status-done { color: var(--low); } .status-failed, .status-stopped { color: var(--crit); } .status-running { color: var(--accent); }
 .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 12px; }
 .kv div:nth-child(odd) { color: var(--muted); }
@@ -187,7 +188,7 @@ async function refresh() {
 }
 
 function stepState(name) {
-  const order = ["scan", "search", "attack"];
+  const order = ["scan", "search", "attack", "review", "report"];
   const live = [...events].reverse().find((e) => e.event_type === "step_started");
   const cur = run.status === "done" || events.some((e) => e.event_type === "run_done") ? "done"
     : (live ? live.payload.step : run.step);
@@ -209,7 +210,11 @@ function renderSteps() {
     ["scan", "1 · Scan", scanDone ? `${scanDone.payload.llm_calls} LLM calls, ${scanDone.payload.tools} tools (MCP scan_project)` : "MCP agentguard-scan: scan_project"],
     ["search", "2 · Search agent", `CrewAI ReAct · ${actions} action${actions === 1 ? "" : "s"}`],
     ["attack", "3 · Attack", probes.length ? `ADK · ${probes.length} probes, ${hits} confirmed${catNow && run.status === "running" ? " · now: " + catNow.payload.title : ""}`
-      : (run.attacks ? `${run.attacks.confirmed} confirmed of ${run.attacks.findings.length}` : "11 ADK attack agents vs sandbox")],
+      : (run.attacks ? `${run.attacks.confirmed} confirmed of ${run.attacks.findings.length}` : "11 ADK attack agents vs sandbox, via A2A")],
+    ["review", "4 · Review crew", (() => { const q = [...events].reverse().find((e) => e.event_type === "qa_result");
+      const rt = events.filter((e) => e.event_type === "retest_done").length;
+      return q ? `CrewAI · QA ${q.payload.approved ? "approved" : "rejected"}${rt ? ` · ${rt} re-tests over A2A` : ""}` : "CrewAI: Lead, Triage, Writer, QA"; })()],
+    ["report", "5 · Report", run.report ? `${run.report.overall_risk.toUpperCase()} · $${run.report.total_usd.toFixed(3)} · ${run.report.total_seconds | 0}s` : "cost, time, evals"],
   ];
   $("#steps").innerHTML = s.map(([k, t, d]) => `<div class="step ${stepState(k)}"><div class="t">${t}</div><div class="d">${esc(d)}</div></div>`).join("");
 }
@@ -225,7 +230,7 @@ function render() {
     </div>
     ${run.error ? `<div class="err" style="margin-bottom:14px">${esc(run.error)}</div>` : ""}
     <div class="steps" id="steps"></div>
-    <div class="tabs">${[["attacks", "Attacks"], ["result", "Search result"], ["trace", "Live trace"], ["scan", "Scan"], ["state", "Checkpoints & usage"]]
+    <div class="tabs">${[["report", "Report"], ["attacks", "Attacks"], ["result", "Search result"], ["trace", "Live trace"], ["scan", "Scan"], ["state", "Checkpoints & usage"]]
       .map(([k, l]) => `<div class="tab ${tab === k ? "sel" : ""}" onclick="setTab('${k}')">${l}</div>`).join("")}</div>
     <div id="tab"></div>`;
   renderSteps(); renderTab();
@@ -233,7 +238,40 @@ function render() {
 
 function setTab(t) { tab = t; render(); }
 function renderTab() {
-  ({ attacks: renderAttacks, result: renderResult, trace: renderTrace, scan: renderScan, state: renderState })[tab]();
+  ({ report: renderReport, attacks: renderAttacks, result: renderResult, trace: renderTrace, scan: renderScan, state: renderState })[tab]();
+}
+
+function renderReport() {
+  const r = run.report;
+  if (!r) { $("#tab").innerHTML = `<div class="panel muted">The report appears after the review crew finishes.</div>`; return; }
+  const ev = run.eval;
+  const sev = (x) => `<span class="badge ${esc(x)}">${esc(x)}</span>`;
+  $("#tab").innerHTML = `<div class="panel"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <h2 style="margin:0">${esc(r.title)}</h2>${sev(r.overall_risk)}
+      <a class="small" style="margin-left:auto" href="/api/runs/${esc(run.id)}/report.md" target="_blank">report.md</a></div>
+      <p>${esc(r.executive_summary)}</p>
+      <div class="grid2">
+        <div class="stat"><div class="n">$${r.total_usd.toFixed(3)}</div><div class="l">estimated cost</div></div>
+        <div class="stat"><div class="n">${r.total_seconds | 0}s</div><div class="l">running time</div></div>
+        <div class="stat"><div class="n">${r.qa.approved ? "approved" : "not approved"}</div><div class="l">QA review · ${r.revisions} revision${r.revisions === 1 ? "" : "s"}</div></div>
+        <div class="stat"><div class="n">${r.plan.retests.length}</div><div class="l">re-tests over A2A</div></div>
+        ${ev ? `<div class="stat"><div class="n">${Math.round(ev.detection_rate * 100)}%</div><div class="l">detection on test set '${esc(ev.dataset)}' (${ev.detected}/${ev.expected})</div></div>` : ""}
+      </div></div>
+    <div class="panel"><h2>Findings (ranked by the Triage Analyst)</h2><div class="scroll-x"><table><thead><tr><th>#</th><th>Finding</th><th>OWASP</th><th>Status</th><th>Severity</th><th>Entry point</th><th>Evidence</th></tr></thead><tbody>
+      ${r.findings.map((f) => `<tr><td>${f.rank}</td><td>${esc(f.title)}</td><td class="small">${esc(f.owasp)}</td><td><b class="${f.status === "confirmed" ? "status-failed" : ""}">${esc(f.status)}</b></td><td>${sev(f.severity)}</td><td class="mono small">${esc(f.entry_point || "—")}</td><td class="mono small">${esc(f.evidence.join(", ") || "—")}</td></tr>`).join("")}
+      </tbody></table></div></div>
+    ${r.sections.map((s) => `<div class="panel"><h2>${esc(s.category)}</h2><p><b>What happened.</b> ${esc(s.what_happened)}</p><p><b>Impact.</b> ${esc(s.impact)}</p><p class="small muted">Evidence: <span class="mono">${esc(s.evidence.join(", "))}</span></p></div>`).join("")}
+    ${r.plan.retests.length ? `<div class="panel"><h2>Re-tests: Security Lead (CrewAI) → attack agents (ADK) over A2A</h2><table><thead><tr><th>Attack type</th><th>Before → after</th><th>Probes</th><th>Hint</th></tr></thead><tbody>
+      ${r.plan.retests.map((t) => `<tr><td>${esc(t.category)}</td><td><b>${esc(t.status_before)} → ${esc(t.status_after)}</b></td><td>${t.probes}</td><td class="small">${esc(t.reason)}</td></tr>`).join("")}</tbody></table></div>` : ""}
+    <div class="panel"><h2>QA review (reflection)</h2><p>${r.qa.approved ? "Approved" : "Not approved"} after ${r.revisions} revision(s).</p>${r.qa.issues.length ? `<ul>${r.qa.issues.map((i) => `<li class="small">${esc(i)}</li>`).join("")}</ul>` : ""}</div>
+    <div class="panel"><h2>Cost and running time</h2><div class="scroll-x"><table><thead><tr><th>Agent</th><th>Model</th><th>Requests</th><th>Prompt tokens</th><th>Output tokens</th><th>USD</th></tr></thead><tbody>
+      ${r.cost.map((c) => `<tr><td>${esc(c.agent)}</td><td class="mono small">${esc(c.model)}</td><td>${c.requests}</td><td>${c.prompt_tokens.toLocaleString()}</td><td>${c.completion_tokens.toLocaleString()}</td><td>$${c.usd.toFixed(4)}</td></tr>`).join("")}
+      <tr><td colspan="5"><b>Total</b></td><td><b>$${r.total_usd.toFixed(4)}</b></td></tr></tbody></table></div>
+      <p class="small muted">Time per step: ${Object.entries(r.timings).map(([k, v]) => `${esc(k)} ${v | 0}s`).join(" · ")} · total ${r.total_seconds | 0}s. Prices: agentguard/costs.py (override with AGENTGUARD_PRICES).</p></div>
+    ${r.a2a.length ? `<div class="panel"><h2>A2A calls</h2><table><thead><tr><th>Agent</th><th>Skill</th><th>State</th><th>Seconds</th></tr></thead><tbody>
+      ${r.a2a.map((c) => `<tr><td class="mono">${esc(c.agent)}</td><td>${esc(c.skill)}</td><td>${esc(c.state)}</td><td>${c.seconds}</td></tr>`).join("")}</tbody></table></div>` : ""}
+    ${ev ? `<div class="panel"><h2>Evaluation against test set '${esc(ev.dataset)}'</h2><p class="small muted">Known answers in evals/${esc(ev.dataset)}.json; also recorded in LangFuse as a dataset run.</p><table><thead><tr><th>Attack type</th><th>Expected</th><th>Got</th><th>Correct</th></tr></thead><tbody>
+      ${ev.items.map((i) => `<tr><td>${esc(i.category)}</td><td>${esc(i.expected)}</td><td>${esc(i.status)}</td><td>${i.correct ? "✓" : "✗"}</td></tr>`).join("")}</tbody></table></div>` : ""}`;
 }
 
 function renderResult() {
@@ -346,8 +384,8 @@ function ctxBars() {
   const calls = events.filter((e) => e.event_type === "llm_call" && e.payload.prompt_tokens);
   if (!calls.length) return `<div class="muted small">No model calls yet.</div>`;
   const max = Math.max(...calls.map((e) => e.payload.prompt_tokens));
-  return `<div class="bars">${calls.map((e) => `<div title="${esc(e.payload.category || "search agent")}: ${e.payload.prompt_tokens} prompt tokens, ${e.payload.completion_tokens || 0} completion"
-    style="height:${Math.max(3, (e.payload.prompt_tokens / max) * 100)}%;background:${e.source === "search_agent" ? "var(--accent)" : "var(--high)"}"></div>`).join("")}</div>
+  return `<div class="bars">${calls.map((e) => `<div title="${esc(e.payload.category || e.payload.agent || "search agent")}: ${e.payload.prompt_tokens} prompt tokens, ${e.payload.completion_tokens || 0} completion"
+    style="height:${Math.max(3, (e.payload.prompt_tokens / max) * 100)}%;background:${({ search_agent: "var(--accent)", review_agent: "var(--low)", target: "var(--muted)" })[e.source] || "var(--high)"}"></div>`).join("")}</div>
     <div class="small muted">largest: ${max.toLocaleString()} prompt tokens · ${calls.length} calls</div>`;
 }
 
@@ -367,7 +405,7 @@ function renderState() {
       ${Object.entries(by).map(([k, n]) => `<div class="stat"><div class="n">${n}</div><div class="l">MCP calls · ${esc(k)}</div></div>`).join("")}
     </div></div>
     <div class="panel"><h2>Context window per model call</h2>
-      <p class="small muted">Prompt tokens sent on each call, in order. <span style="color:var(--accent)">■</span> Search agent (CrewAI) <span style="color:var(--high)">■</span> attack agents (ADK). Hover a bar for details.</p>
+      <p class="small muted">Prompt tokens sent on each call, in order. <span style="color:var(--accent)">■</span> Search agent (CrewAI) <span style="color:var(--high)">■</span> attack agents (ADK) <span style="color:var(--low)">■</span> review crew (CrewAI) <span style="color:var(--muted)">■</span> app under attack. Hover a bar for details.</p>
       ${ctxBars()}</div>
     <div class="panel"><h2>ADK attack-agent checkpoints (${(run.adk || []).length} sessions)</h2>
       <p class="small muted">Each attack type runs in its own ADK session saved by DatabaseSessionService in <span class="mono">adk_sessions.db</span>: every model turn, tool call and state change is stored as an event.</p>
@@ -375,11 +413,11 @@ function renderState() {
         `<tr><td class="mono small">${esc(s.id)}</td><td>${s.events}</td><td class="mono small">${esc(JSON.stringify(s.state).slice(0, 300))}</td><td class="small">${esc(s.updated)}</td></tr>`).join("")
         || `<tr><td colspan="4" class="muted">None yet.</td></tr>`}</tbody></table></div></div>
     <div class="panel"><h2>CrewAI checkpoints (${run.checkpoints.length})</h2>
-      <p class="small muted">CrewAI checkpoints in <span class="mono">checkpoints.db</span> (SQLite): one after every flow step and every crew task.
+      <p class="small muted">CrewAI checkpoints in <span class="mono">checkpoints.db</span> (main flow) and <span class="mono">review_checkpoints.db</span> (review crew), SQLite: one after every flow step and every crew task.
       A failed or stopped run resumes from the newest one and skips the steps already finished.</p>
-      <table><thead><tr><th>Checkpoint</th><th>Created</th><th>Parent</th></tr></thead><tbody>${run.checkpoints.map((c) =>
-        `<tr><td class="mono">${esc(c.id)}</td><td class="small">${esc(c.created_at)}</td><td class="mono small">${esc(c.parent_id || "—")}</td></tr>`).join("")
-        || `<tr><td colspan="3" class="muted">None yet.</td></tr>`}</tbody></table></div>`;
+      <table><thead><tr><th>Checkpoint</th><th>Owner</th><th>Created</th><th>Parent</th></tr></thead><tbody>${run.checkpoints.map((c) =>
+        `<tr><td class="mono">${esc(c.id)}</td><td>${esc(c.owner || "flow")}</td><td class="small">${esc(c.created_at)}</td><td class="mono small">${esc(c.parent_id || "—")}</td></tr>`).join("")
+        || `<tr><td colspan="4" class="muted">None yet.</td></tr>`}</tbody></table></div>`;
 }
 
 (async () => {

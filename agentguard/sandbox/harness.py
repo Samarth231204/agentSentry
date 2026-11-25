@@ -58,6 +58,16 @@ def _our_kwargs(kwargs: dict) -> dict:
     return kwargs
 
 
+def _record(entry: dict, resp: Any) -> Any:
+    """Adds the target model's token usage to an LLM_CALLS entry (for the run's cost)."""
+    u = getattr(resp, "usage", None)
+    if u is not None:
+        entry["model"] = SPEC["target_model"]
+        entry["prompt_tokens"] = getattr(u, "prompt_tokens", 0) or 0
+        entry["completion_tokens"] = getattr(u, "completion_tokens", 0) or 0
+    return resp
+
+
 def redirect_models() -> None:
     try:
         import litellm
@@ -70,14 +80,16 @@ def redirect_models() -> None:
             kwargs.setdefault("model", args[0])
             if len(args) > 1:
                 kwargs.setdefault("messages", args[1])
-        LLM_CALLS.append({"via": "litellm", "asked_model": kwargs.get("model"), "system": _system_text(kwargs.get("messages"))})
-        return real_completion(**_our_kwargs(kwargs))
+        entry = {"via": "litellm", "asked_model": kwargs.get("model"), "system": _system_text(kwargs.get("messages"))}
+        LLM_CALLS.append(entry)
+        return _record(entry, real_completion(**_our_kwargs(kwargs)))
 
     async def acompletion(*args, **kwargs):
         if args:
             kwargs.setdefault("model", args[0])
-        LLM_CALLS.append({"via": "litellm", "asked_model": kwargs.get("model"), "system": _system_text(kwargs.get("messages"))})
-        return await real_acompletion(**_our_kwargs(kwargs))
+        entry = {"via": "litellm", "asked_model": kwargs.get("model"), "system": _system_text(kwargs.get("messages"))}
+        LLM_CALLS.append(entry)
+        return _record(entry, await real_acompletion(**_our_kwargs(kwargs)))
 
     litellm.completion, litellm.acompletion = completion, acompletion
 
@@ -85,9 +97,10 @@ def redirect_models() -> None:
         from openai.resources.chat.completions import Completions
 
         def create(self, *args, **kwargs):
-            LLM_CALLS.append({"via": "openai", "asked_model": kwargs.get("model"), "system": _system_text(kwargs.get("messages"))})
+            entry = {"via": "openai", "asked_model": kwargs.get("model"), "system": _system_text(kwargs.get("messages"))}
+            LLM_CALLS.append(entry)
             kwargs = {k: v for k, v in kwargs.items() if v is not None and k not in ("stream",)}
-            return real_completion(**_our_kwargs(kwargs))
+            return _record(entry, real_completion(**_our_kwargs(kwargs)))
 
         Completions.create = create
     except ImportError:

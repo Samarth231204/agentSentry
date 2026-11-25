@@ -1,0 +1,18 @@
+{
+  "dataset": "vulnlab",
+  "description": "VulnLab: 11 deliberately vulnerable AI apps, one per attack type. Every attack type is expected to be confirmed.",
+  "project_names": ["vuln-agent-lab"],
+  "expected": {
+    "prompt_injection": "confirmed",
+    "secret_extraction": "confirmed",
+    "tool_misuse": "confirmed",
+    "data_exfiltration": "confirmed",
+    "privilege_escalation": "confirmed",
+    "rag_poisoning": "confirmed",
+    "memory_persistence": "confirmed",
+    "unsafe_execution": "confirmed",
+    "sql_injection": "confirmed",
+    "insecure_output": "confirmed",
+    "indirect_injection": "confirmed"
+  }
+}

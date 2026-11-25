@@ -146,3 +146,109 @@ class AttackReport(BaseModel):
     resisted: int = 0
     probes: int = 0
     usage: dict[str, Any] = Field(default_factory=dict)
+    target_usage: dict[str, Any] = Field(default_factory=dict, description="Tokens the app under attack used")
+
+
+# ---- Review phase (CrewAI review crew) -------------------------------------------------------------
+
+Severity = Literal["critical", "high", "medium", "low", "info"]
+
+
+class Retest(BaseModel):
+    category: str
+    reason: str = ""
+    status_before: str = ""
+    status_after: str = ""
+    detail: str = ""
+    probes: int = 0
+
+
+class LeadPlan(BaseModel):
+    """Security Lead: what the review should focus on, and which findings were re-tested over A2A."""
+    focus: list[str] = Field(default_factory=list, description="Finding categories that matter most, in order")
+    retests: list[Retest] = Field(default_factory=list, description="Re-tests asked of the ADK attack agents")
+    notes_for_triage: str = ""
+
+
+class TriagedFinding(BaseModel):
+    category: str
+    title: str
+    status: Literal["confirmed", "suspected", "resisted", "not_tested"]
+    severity: Severity
+    rank: int = Field(description="1 = most urgent")
+    duplicate_of: str = Field(default="", description="Category this one duplicates, if any")
+    rationale: str = Field(description="Why this severity: impact and how easy it was")
+    evidence: list[str] = Field(default_factory=list, description="Probe ids such as 'tool_misuse#2'")
+
+
+class TriageResult(BaseModel):
+    overall_risk: Severity
+    findings: list[TriagedFinding]
+
+
+class ReportSection(BaseModel):
+    category: str
+    what_happened: str = Field(description="Plain-language account of the attack and the target's behaviour")
+    impact: str = Field(description="What a real attacker could do with this")
+    evidence: list[str] = Field(default_factory=list, description="Probe ids backing every claim")
+
+
+class ReportDraft(BaseModel):
+    """Report Writer's prose. Tables, evidence and cost are filled in by code from the real data."""
+    title: str
+    executive_summary: str
+    sections: list[ReportSection]
+
+
+class QAReview(BaseModel):
+    approved: bool
+    issues: list[str] = Field(default_factory=list, description="Each unsupported or wrong claim, and how to fix it")
+
+
+class ReportRow(BaseModel):
+    rank: int
+    category: str
+    title: str
+    owasp: str
+    status: str
+    severity: str
+    entry_point: str = ""
+    evidence: list[str] = Field(default_factory=list)
+
+
+class EvidenceItem(BaseModel):
+    id: str
+    entry_point: str
+    session: str
+    attacker: str
+    target: str
+    tools: list[str] = Field(default_factory=list)
+    oracle: str = ""
+
+
+class CostLine(BaseModel):
+    agent: str
+    model: str
+    requests: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    usd: float = 0.0
+
+
+class FinalReport(BaseModel):
+    run_id: str = ""
+    project: str = ""
+    title: str
+    overall_risk: Severity
+    executive_summary: str
+    findings: list[ReportRow]
+    sections: list[ReportSection]
+    evidence: list[EvidenceItem]
+    plan: LeadPlan
+    qa: QAReview
+    revisions: int = 0
+    cost: list[CostLine] = Field(default_factory=list)
+    total_usd: float = 0.0
+    timings: dict[str, float] = Field(default_factory=dict, description="Seconds per step")
+    total_seconds: float = 0.0
+    a2a: list[dict[str, Any]] = Field(default_factory=list, description="A2A calls made in this run")

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import threading
 import time
@@ -42,7 +43,7 @@ from agentguard.mcp.payload_server import payload_spec
 from agentguard.attack.oracles import OracleContext, check, observe, tool_kind
 from agentguard.events import emit
 from agentguard.llm import extra_headers
-from agentguard.sandbox.runner import Sandbox, SandboxError
+from agentguard.sandbox.runner import TARGET_MODEL, Sandbox, SandboxError
 from agentguard.schemas import AttackFinding, AttackReport, Probe, SearchResult, ToolCall
 
 ATTACK_MODEL = "anthropic/claude-haiku-5-5"
@@ -111,14 +112,18 @@ def _targets_text(search: SearchResult) -> str:
 
 
 class AttackTeam:
-    def __init__(self, project: str | Path, search: SearchResult, run_dir: str | Path, max_probes: int = 4):
+    def __init__(self, project: str | Path, search: SearchResult, run_dir: str | Path, max_probes: int = 4,
+                 hint: str = ""):
         self.project = Path(project).resolve()
         self.search = search
         self.run_dir = Path(run_dir)
         self.max_probes = max_probes
+        self.hint = hint  # from the Security Lead when a finding is re-tested
         self.sandbox = Sandbox(self.project, search, run_dir)
         self.findings: dict[str, AttackFinding] = {}
         self.usage = {"model": ATTACK_MODEL, "requests": 0, "prompt_tokens": 0, "completion_tokens": 0}
+        self.target_usage = {"model": os.environ.get("AGENTGUARD_TARGET_MODEL", TARGET_MODEL), "requests": 0,
+                             "prompt_tokens": 0, "completion_tokens": 0}
         self.entry_ids = {e.id for e in search.entry_points}
         self.trap: Optional[TrapServer] = None
         self.last_page: dict[str, str] = {}
@@ -152,6 +157,13 @@ class AttackTeam:
                           web_reads=[f"{h['kind']}:{h['id']}" for h in (self.trap.hits if self.trap else [])
                                      if h["time"] >= t0])
             observe(ctx, probe, raw.get("llm_calls", []))
+            for c in raw.get("llm_calls", []):
+                if "prompt_tokens" in c:
+                    self.target_usage["requests"] += 1
+                    self.target_usage["prompt_tokens"] += c["prompt_tokens"]
+                    self.target_usage["completion_tokens"] += c["completion_tokens"]
+                    emit("target", "llm_call", category=cat.id, model=c.get("model"),
+                         prompt_tokens=c["prompt_tokens"], completion_tokens=c["completion_tokens"])
             hit, detail = check(cat.id, ctx, probe)
             finding.probes.append(probe)
             if hit:
@@ -333,7 +345,10 @@ class AttackTeam:
     # ---- running ---------------------------------------------------------------------------------
     def _prior(self) -> str:
         done = [f for f in self.findings.values() if f.status in ("confirmed", "suspected", "resisted")]
-        return "\n".join(f"- {f.title}: {f.status}. {f.detail[:160]}" for f in done) or "(none yet)"
+        text = "\n".join(f"- {f.title}: {f.status}. {f.detail[:160]}" for f in done) or "(none yet)"
+        if self.hint:
+            text += f"\nRE-TEST requested by the Security Lead. Earlier attempts were inconclusive. Hint: {self.hint}"
+        return text
 
     def _save(self) -> None:
         report = self.report()
@@ -344,7 +359,8 @@ class AttackTeam:
         return AttackReport(findings=fs, confirmed=sum(f.status == "confirmed" for f in fs),
                             suspected=sum(f.status == "suspected" for f in fs),
                             resisted=sum(f.status == "resisted" for f in fs),
-                            probes=sum(len(f.probes) for f in fs), usage=dict(self.usage))
+                            probes=sum(len(f.probes) for f in fs), usage=dict(self.usage),
+                            target_usage=dict(self.target_usage))
 
     async def _run_category(self, cat: Category, service: DatabaseSessionService) -> None:
         ctx = OracleContext(search=self.search, project=self.project)
@@ -403,9 +419,9 @@ class AttackTeam:
 
 
 def run_attacks(project: str | Path, search: SearchResult, run_dir: str | Path,
-                categories: Optional[list[str]] = None, max_probes: int = 4) -> AttackReport:
+                categories: Optional[list[str]] = None, max_probes: int = 4, hint: str = "") -> AttackReport:
     """Runs the async team on its own thread and event loop (safe to call from a CrewAI Flow step)."""
-    team = AttackTeam(project, search, run_dir, max_probes=max_probes)
+    team = AttackTeam(project, search, run_dir, max_probes=max_probes, hint=hint)
     done = Path(run_dir) / "attacks.json"
     if done.exists():  # resuming: keep categories that already finished
         try:

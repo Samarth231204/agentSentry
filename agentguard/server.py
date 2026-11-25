@@ -16,7 +16,7 @@ import json
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 
 from agentguard import runs
 from agentguard.llm import has_key, model_name
@@ -71,6 +71,27 @@ def create_app(project: str | Path) -> FastAPI:
         if run is None:
             raise HTTPException(404, "no such run")
         return run
+
+    @app.get("/api/runs/{run_id}/report.md", response_class=PlainTextResponse)
+    def report_md(run_id: str) -> str:
+        path = runs.runs_dir(project) / Path(run_id).name / "report.md"
+        if not path.exists():
+            raise HTTPException(404, "no report for this run yet")
+        return path.read_text()
+
+    @app.get("/api/a2a")
+    def a2a_cards() -> dict:
+        """The Agent Cards of the two A2A services (if they are running)."""
+        import httpx
+
+        from agentguard.a2a.cards import attack_url, review_url
+        out = {}
+        for name, url in (("attack", attack_url()), ("review", review_url())):
+            try:
+                out[name] = httpx.get(f"{url}/.well-known/agent-card.json", timeout=2).json()
+            except Exception:  # noqa: BLE001
+                out[name] = {"url": url, "running": False}
+        return out
 
     @app.get("/api/runs/{run_id}/events")
     async def events(run_id: str) -> StreamingResponse:

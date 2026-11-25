@@ -1,6 +1,7 @@
 # AgentGuard
 
-AgentGuard finds the parts of an AI agent that an attacker would target, then attacks them in a sandbox.
+AgentGuard finds the parts of an AI agent that an attacker would target, attacks them in a sandbox, and
+writes an evidence-backed report with cost and running time.
 
 ## Run it
 
@@ -23,7 +24,8 @@ AgentGuard flow  (CrewAI Flow, checkpointed to SQLite after every step)
                       semgrep_search                        external MCP server (official semgrep-mcp)
              guardrail: every file:line and entry point must exist, or the agent must fix its answer
              output: SearchResult (Pydantic) → search.json  entry points, main LLM call, risky tools
-  3. attack  11 ADK attack agents (Haiku 5.5), one per attack type, one after another
+  3. attack  A2A task to the ADK attack service (Agent Card at :8771/.well-known/agent-card.json)
+             11 ADK attack agents (Haiku 5.5), one per attack type, one after another
                tools: get_payloads, disguise               our MCP server (agentguard-payloads): proven
                                                            techniques + disguises (base64, homoglyphs, ...)
                       plant_web_page, preview_page          trap web server + external MCP server (official
@@ -34,7 +36,17 @@ AgentGuard flow  (CrewAI Flow, checkpointed to SQLite after every step)
                an ORACLE (plain code) confirms a hit from what really happened; the agent can only
                say "suspected"
              output: AttackReport (Pydantic) → attacks.json
+  4. review  ADK hands the results to the CrewAI review service over A2A (ADK RemoteA2aAgent → :8772)
+             Security Lead   plans; re-tests suspected findings by calling the ADK service back over A2A
+             Triage Analyst  dedupes, rates severity (OWASP-based), ranks
+             Report Writer   writes the prose; every claim cites probe ids
+             QA Reviewer     checks every claim against the evidence; a rejected draft is revised once
+             task guardrails reject statuses or probe ids the data does not support
+  5. report  report.json + report.md: findings, evidence, re-tests, QA, cost per agent and model,
+             time per step, A2A calls; on a known test project (VulnLab) an eval against known answers
 ```
+
+Design patterns used, and why: [docs/DESIGN_PATTERNS.md](docs/DESIGN_PATTERNS.md).
 
 Attack types: prompt injection, secret extraction, tool misuse, data exfiltration, privilege escalation,
 RAG poisoning, memory persistence, unsafe command execution, SQL injection, insecure output handling, and
@@ -42,12 +54,14 @@ indirect prompt injection through a web page (only when the app has a tool that 
 
 Each run lives in `your-project/.agentguard/runs/<run-id>/`:
 - `search.json`, the Search agent's result
-- `attacks.json`, the attack results
+- `attacks.json`, the attack results (including re-tests)
+- `report.json`, `report.md`, the final report; `eval.json` on a test project
 - `trace.jsonl`, every thought, action, observation, probe, guardrail hit and MCP call
-- `checkpoints.db`, the CrewAI checkpoints
+- `checkpoints.db`, `review_checkpoints.db`, the CrewAI checkpoints (main flow, review crew)
 - `adk_sessions.db`, the ADK attack agents' sessions (every event saved)
 - `sandbox/`, the project copy and its log
 - `trap_pages/`, the web pages planted for indirect injection
+- `retests/`, the re-tests the Security Lead asked for
 
 A failed or stopped run resumes from its last checkpoint.
 
@@ -58,7 +72,15 @@ A failed or stopped run resumes from its last checkpoint.
   - Our attackers' messages are checked for abusive language.
   - Tool arguments and return types are validated.
   - The Search agent's tool output is checked for injections planted in code.
-- LangFuse tracing switches on when `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are set.
+- LangFuse switches on when `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are set: one trace per run with
+  a span per step, every model call as a generation with tokens and cost, A2A calls, guardrail events, and
+  scores (confirmed, suspected, probes, cost_usd, seconds, qa_approved; on VulnLab detection_rate and
+  false_alarms, plus a dataset run).
+
+**A2A services.** `agentguard up` starts both inside its own process, each on its own port. In the cloud
+run them separately with `agentguard a2a-attack` and `agentguard a2a-review`, and point
+`AGENTGUARD_A2A_ATTACK_URL` / `AGENTGUARD_A2A_REVIEW_URL` at them. `AGENTGUARD_A2A=0` runs the same agents
+in-process without A2A.
 
 ## Code map
 
@@ -74,8 +96,11 @@ A failed or stopped run resumes from its last checkpoint.
 | `agentguard/attack/payloads.py`, `mcp/payload_server.py` | The payload library and its MCP server |
 | `agentguard/attack/trap.py`, `mcp/fetch.py` | Trap web server for planted pages; the official Fetch MCP server |
 | `agentguard/guardrails.py` | Injection and toxicity checks, untrusted fencing, type checks |
+| `agentguard/a2a/` | Agent Cards, the ADK attack service, the CrewAI review service, the A2A client |
+| `agentguard/review/crew.py`, `review/report.py` | The review crew (Flow, guardrails, fallbacks); the final report |
+| `agentguard/costs.py`, `agentguard/evals.py`, `evals/` | Prices and cost; run scores and test sets with known answers |
 | `agentguard/observability.py` | LangFuse tracing (optional) |
-| `agentguard/schemas.py` | Pydantic models: `ScanReport`, `SearchResult`, `AttackReport`, `TraceEvent` |
+| `agentguard/schemas.py` | Pydantic models: `ScanReport`, `SearchResult`, `AttackReport`, `LeadPlan`, `TriageResult`, `ReportDraft`, `QAReview`, `FinalReport` |
 | `agentguard/runs.py`, `server.py`, `static/index.html` | Runs, the API and live event stream, the dashboard |
 
 ## Requirements

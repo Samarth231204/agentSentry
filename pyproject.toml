@@ -1,6 +1,6 @@
 [project]
 name = "agentguard"
-version = "0.3.0"
+version = "0.4.0"
 description = "Finds and red-teams the vulnerable parts of an AI agent"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -18,7 +18,8 @@ dependencies = [
     "aiosqlite>=0.20",             # ADK session checkpoints in SQLite
     "langfuse>=3.0,<4.0",          # optional tracing (on when LANGFUSE_* keys are set)
     # Pinned: checkpointing (crewai.state) and the LLM patch in llm.py are tested on this version.
-    "crewai==1.15.22",
+    "crewai[a2a]==1.15.22",
+    "a2a-sdk[http-server]~=0.3.10",  # A2A protocol: Agent Cards, JSON-RPC over HTTP (ADK and CrewAI both use it)
 ]
 
 [project.optional-dependencies]

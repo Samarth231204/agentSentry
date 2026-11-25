@@ -158,46 +158,57 @@ def react_thought(response: Any) -> str:
     return text[len("Thought:"):].strip() if text.startswith("Thought:") else text
 
 
+# Agent role -> trace source. Other crews (the review crew) add their roles here.
+ROLE_SOURCES: dict[str, str] = {}
+
+
 def register_monitoring() -> None:
+    """CrewAI event-bus listeners: every model call, Thought, Action and Observation of AgentGuard's
+    CrewAI agents goes to the trace (and so to the dashboard and LangFuse)."""
     global _registered
+    ROLE_SOURCES.setdefault(AGENT_ROLE, "search_agent")
     if _registered:
         return
     _registered = True
     from crewai.events import (LLMCallCompletedEvent, ToolUsageErrorEvent, ToolUsageFinishedEvent,
                                ToolUsageStartedEvent, crewai_event_bus)
 
-    def mine(event: Any) -> bool:
+    def source(event: Any) -> tuple[Optional[str], str]:
         role = getattr(event, "agent_role", None) or getattr(getattr(event, "from_agent", None), "role", None)
-        return role == AGENT_ROLE
+        return ROLE_SOURCES.get(role or ""), role or ""
 
     @crewai_event_bus.on(LLMCallCompletedEvent)
-    def _llm(source: Any, event: Any) -> None:
-        if not mine(event):
+    def _llm(_: Any, event: Any) -> None:
+        src, role = source(event)
+        if not src:
             return
         usage = event.usage if isinstance(event.usage, dict) else {}
-        emit("search_agent", "llm_call", model=event.model, finish_reason=event.finish_reason,
+        emit(src, "llm_call", agent=role, model=event.model, finish_reason=event.finish_reason,
              prompt_tokens=usage.get("prompt_tokens"), completion_tokens=usage.get("completion_tokens"))
         thought = react_thought(event.response)
         if thought:  # the model's reply arrives before its tool runs, so the Thought comes first
-            emit("search_agent", "thought", text=thought[:3000])
+            emit(src, "thought", agent=role, text=thought[:3000])
 
     @crewai_event_bus.on(ToolUsageStartedEvent)
-    def _action(source: Any, event: Any) -> None:
-        if mine(event):
-            emit("search_agent", "action", tool=event.tool_name, input=str(event.tool_args)[:1000])
+    def _action(_: Any, event: Any) -> None:
+        src, role = source(event)
+        if src:
+            emit(src, "action", agent=role, tool=event.tool_name, input=str(event.tool_args)[:1000])
 
     @crewai_event_bus.on(ToolUsageFinishedEvent)
-    def _observation(source: Any, event: Any) -> None:
-        if mine(event):
-            emit("search_agent", "observation", tool=event.tool_name, text=str(event.output)[:3000])
+    def _observation(_: Any, event: Any) -> None:
+        src, role = source(event)
+        if src:
+            emit(src, "observation", agent=role, tool=event.tool_name, text=str(event.output)[:3000])
             flags = guardrails.injection_flags(str(event.output))
             if flags:  # the user's code or documents contain text aimed at AI agents
-                emit("guardrail", "injection_in_observation", agent=AGENT_ROLE, tool=event.tool_name, flags=flags)
+                emit("guardrail", "injection_in_observation", agent=role, tool=event.tool_name, flags=flags)
 
     @crewai_event_bus.on(ToolUsageErrorEvent)
-    def _tool_error(source: Any, event: Any) -> None:
-        if mine(event):
-            emit("search_agent", "observation", tool=event.tool_name, error=str(getattr(event, "error", ""))[:1000])
+    def _tool_error(_: Any, event: Any) -> None:
+        src, role = source(event)
+        if src:
+            emit(src, "observation", agent=role, tool=event.tool_name, error=str(getattr(event, "error", ""))[:1000])
 
 
 def _step_callback(step: Any) -> None:
@@ -267,7 +278,42 @@ class SearchState(FlowState):
     result: dict = Field(default_factory=dict)
     usage: dict = Field(default_factory=dict)
     attack_summary: dict = Field(default_factory=dict)
+    review: dict = Field(default_factory=dict)
+    report_summary: dict = Field(default_factory=dict)
     step: str = "pending"
+
+
+def _patch_checkpoint_panic() -> None:
+    """CrewAI saves a checkpoint by serialising the whole runtime state (every flow and crew in the process).
+    When another thread (the A2A services, the review crew) changes a dict at that moment, pydantic-core
+    raises a Rust PanicException, a BaseException that CrewAI's `except Exception` does not catch, so the
+    flow fails after its work is done. Retry a few times, then skip that one checkpoint with a warning."""
+    from crewai.state import checkpoint_listener as cl
+    if getattr(cl._do_checkpoint, "_agentguard", False):
+        return
+    original = cl._do_checkpoint
+
+    def safe(state, cfg, event=None):
+        for attempt in range(3):
+            try:
+                return original(state, cfg, event)
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except BaseException as exc:  # noqa: BLE001 - PanicException derives from BaseException
+                if type(exc).__name__ != "PanicException" and isinstance(exc, Exception):
+                    raise
+                if attempt == 2:
+                    emit("flow", "checkpoint_skipped", error=f"{type(exc).__name__}: {exc}",
+                         trigger=getattr(event, "type", None))
+                    return None
+                import time
+                time.sleep(0.05 * (attempt + 1))
+
+    safe._agentguard = True
+    cl._do_checkpoint = safe
+
+
+_patch_checkpoint_panic()
 
 
 def checkpoint_config(run_dir: str | Path, events: list[str]) -> CheckpointConfig:
@@ -336,7 +382,11 @@ def build_crew(project: str, scan: ScanReport, run_dir: str) -> Crew:
 
 
 class SearchFlow(Flow[SearchState]):
-    """scan -> search -> attack, checkpointed after each method."""
+    """scan -> search -> attack (+ review) -> report, checkpointed after each method.
+
+    The attack step is an A2A task to the ADK attack service, which hands its results to the CrewAI
+    review service over A2A; the review's Security Lead can call the attack service back for re-tests.
+    AGENTGUARD_A2A=0 runs the same agents in-process without A2A."""
 
     @start()
     def scan(self) -> None:
@@ -365,22 +415,87 @@ class SearchFlow(Flow[SearchState]):
 
     @listen(search)
     def attack(self) -> dict:
+        from agentguard.attack.categories import CATEGORIES
         from agentguard.attack.team import ATTACK_MODEL, run_attacks
+        from agentguard.schemas import AttackReport
 
         self.state.step = "attack"
-        emit("flow", "step_started", step="attack", detail=f"10 ADK attack agents ({ATTACK_MODEL}) vs sandbox")
+        emit("flow", "step_started", step="attack",
+             detail=f"{len(CATEGORIES)} ADK attack agents ({ATTACK_MODEL}) vs sandbox, over A2A")
         result = SearchResult.model_validate(self.state.result)
         if not result.entry_points:
             emit("flow", "error", error="The Search agent found no entry point to attack.")
             return {}
-        report = run_attacks(self.state.project, result, self.state.run_dir,
-                             max_probes=int(os.environ.get("AGENTGUARD_MAX_PROBES", "4")))
+        max_probes = int(os.environ.get("AGENTGUARD_MAX_PROBES", "4"))
+        if os.environ.get("AGENTGUARD_A2A", "1") != "0":
+            from agentguard.a2a.client import send_sync
+            from agentguard.a2a.servers import start_local_services
+
+            urls = start_local_services()  # no-op when the services already run (cloud)
+            out = send_sync(urls["attack"], {"mode": "attack", "project": self.state.project, "run_dir": self.state.run_dir,
+                                             "search": result.model_dump(), "max_probes": max_probes},
+                            skill="attack", context_id=Path(self.state.run_dir).name)
+            report = AttackReport.model_validate(out["attack_report"])
+            self.state.review = out.get("review") or {}
+        else:
+            from agentguard.review.crew import run_review
+
+            report = run_attacks(self.state.project, result, self.state.run_dir, max_probes=max_probes)
+            final, report2, usage = run_review(report, self.state.run_dir)
+            self.state.review = {"report": final.model_dump(), "attack_report": report2.model_dump(), "usage": usage}
+        if self.state.review.get("attack_report"):  # includes findings the Security Lead had re-tested
+            report = AttackReport.model_validate(self.state.review["attack_report"])
+        for k in ("confirmed", "suspected", "resisted"):
+            setattr(report, k, sum(f.status == k for f in report.findings))
+        Path(self.state.run_dir, "attacks.json").write_text(report.model_dump_json(indent=2))
         self.state.attack_summary = {"confirmed": report.confirmed, "suspected": report.suspected,
                                      "resisted": report.resisted, "probes": report.probes, "usage": report.usage}
         emit("attack", "usage", **report.usage)
         emit("flow", "step_done", step="attack", file="attacks.json", **{k: v for k, v in self.state.attack_summary.items() if k != "usage"})
-        self.state.step = "done"
+        if self.state.review.get("error"):
+            emit("flow", "error", error=f"Review: {self.state.review['error']}")
         return self.state.attack_summary
+
+    @listen(attack)
+    def report(self) -> dict:
+        from agentguard import evals
+        from agentguard.review.report import finalize, to_markdown
+        from agentguard.schemas import AttackReport, FinalReport
+
+        if not self.state.review.get("report"):
+            self.state.step = "done"
+            return {}
+        self.state.step = "report"
+        emit("flow", "step_started", step="report", detail="Final report: cost, running time, evals")
+        run_dir = Path(self.state.run_dir)
+        attacks = AttackReport.model_validate_json((run_dir / "attacks.json").read_text())
+        final = finalize(FinalReport.model_validate(self.state.review["report"]), run_dir, run_dir.name,
+                         self.state.project, self.state.usage, attacks, self.state.review)
+        (run_dir / "report.json").write_text(final.model_dump_json(indent=2))
+        (run_dir / "report.md").write_text(to_markdown(final))
+        scores = evals.run_scores(final, attacks)
+        spec = evals.dataset_for(self.state.project)
+        evaluation = evals.score_against(spec, attacks) if spec else None
+        if evaluation:
+            scores["detection_rate"] = evaluation["detection_rate"]
+            scores["false_alarms"] = float(evaluation["false_alarms"])
+            (run_dir / "eval.json").write_text(json.dumps(evaluation, indent=2))
+        emit("flow", "eval_scores", scores=scores, dataset=spec["dataset"] if spec else None)
+        for line in final.cost:
+            emit("cost", "cost_line", **line.model_dump())
+        if evaluation:
+            from agentguard.observability import enabled
+            if enabled():
+                try:
+                    emit("flow", "eval_dataset", status=evals.push_to_langfuse(spec, evaluation, run_dir.name))
+                except Exception as exc:  # noqa: BLE001
+                    emit("flow", "eval_dataset", status=f"LangFuse dataset upload failed: {str(exc)[:300]}")
+        self.state.report_summary = {"overall_risk": final.overall_risk, "total_usd": final.total_usd,
+                                     "total_seconds": final.total_seconds, "qa_approved": final.qa.approved,
+                                     "detection_rate": (evaluation or {}).get("detection_rate")}
+        emit("flow", "step_done", step="report", file="report.md", **self.state.report_summary)
+        self.state.step = "done"
+        return self.state.report_summary
 
 
 def run_search(project: str | Path, run_dir: str | Path) -> dict:
