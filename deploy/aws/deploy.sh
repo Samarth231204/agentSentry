@@ -4,12 +4,14 @@
 #   deploy/aws/deploy.sh up        create everything (S3, SSM keys, IAM role, security group, EC2) and start
 #   deploy/aws/deploy.sh update    upload the current code and rebuild/restart on the instance
 #   deploy/aws/deploy.sh keys      copy .env into SSM again, then restart the container
-#   deploy/aws/deploy.sh allow-ip  let your current IP reach the dashboard (it has no login)
+#   deploy/aws/deploy.sh allow-ip  let your current IP reach the dashboard
+#   deploy/aws/deploy.sh url       print the dashboard link with your login token
 #   deploy/aws/deploy.sh status | start | stop | logs
 #
 # Layout: AgentGuard/ and the demo target vuln-agent-lab/ side by side (VULNLAB=... to change).
 # Keys: SSM Parameter Store, SecureString, /agentguard/<NAME>. Run results: s3://<bucket>/runs/.
-# Access: dashboard port 8765 from your IP only; no SSH port (shell: aws ssm start-session).
+# Access: dashboard port 8765 from your IP only, plus a login token (AGENTGUARD_DASHBOARD_TOKEN in .env,
+# created on first 'up' or 'keys'); no SSH port (shell: aws ssm start-session).
 set -euo pipefail
 
 REGION="${AWS_REGION:-ap-south-1}"
@@ -60,7 +62,24 @@ release() {
   rm -rf "$tmp"
 }
 
+ensure_token() {  # a random dashboard login token in .env, created once; never printed here
+  if ! grep -qE '^AGENTGUARD_DASHBOARD_TOKEN=.+' "$REPO/.env"; then
+    printf '\n# Dashboard login (open the dashboard once with ?token=<this>)\nAGENTGUARD_DASHBOARD_TOKEN=%s\n' \
+      "$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')" >> "$REPO/.env"
+    say "created AGENTGUARD_DASHBOARD_TOKEN in .env"
+  fi
+}
+
+dashboard_url() {
+  local ip token
+  ip="$("${AWS[@]}" ec2 describe-instances --instance-ids "$(instance_id)" \
+        --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)"
+  token="$(grep -E '^AGENTGUARD_DASHBOARD_TOKEN=' "$REPO/.env" | tail -1 | cut -d= -f2-)"
+  echo "http://$ip:$PORT/?token=$token"
+}
+
 keys() {
+  ensure_token
   say "keys and settings from $REPO/.env -> SSM /agentguard/ (SecureString)"
   # boto3 cannot read `aws login` sessions directly; hand it the CLI's current credentials (this subshell only)
   ( eval "$(aws configure export-credentials --format env)"; python3 "$HERE/put_params.py" "$REPO/.env" "$REGION" )
@@ -144,8 +163,8 @@ wait_ready() {
   "${AWS[@]}" ec2 wait instance-running --instance-ids "$id"
   ip="$("${AWS[@]}" ec2 describe-instances --instance-ids "$id" --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)"
   for i in $(seq 1 90); do
-    if curl -fs -m 4 "http://$ip:$PORT/api/a2a" >/dev/null; then
-      say "AgentGuard is live: http://$ip:$PORT"; return 0
+    if curl -fs -m 4 "http://$ip:$PORT/healthz" >/dev/null; then
+      say "AgentGuard is live. Open (keep this link private): $(dashboard_url)"; return 0
     fi
     sleep 10
   done
@@ -182,6 +201,7 @@ case "${1:-}" in
     keys
     run_on_instance "REGION=$REGION BUCKET=$BUCKET bash /opt/install.sh" ;;
   allow-ip) allow_ip ;;
+  url) dashboard_url ;;
   start)
     id="$(instance_id)"; "${AWS[@]}" ec2 start-instances --instance-ids "$id" >/dev/null; wait_ready "$id" ;;
   stop)
@@ -191,5 +211,5 @@ case "${1:-}" in
     "${AWS[@]}" ec2 describe-instances --filters "Name=tag:Name,Values=$NAME" \
       --query 'Reservations[].Instances[].[InstanceId,InstanceType,State.Name,PublicIpAddress]' --output table ;;
   logs) run_on_instance "tail -30 /var/log/agentguard-install.log; docker ps; docker logs --tail 60 agentguard 2>&1" ;;
-  *) sed -n 2,13p "$0"; exit 1 ;;
+  *) sed -n 2,15p "$0"; exit 1 ;;
 esac

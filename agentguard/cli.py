@@ -24,17 +24,24 @@ def main(ctx: click.Context) -> None:
 @click.option("--port", default=8765, show_default=True)
 @click.option("--no-browser", is_flag=True)
 @click.option("--host", default="127.0.0.1", show_default=True,
-              help="0.0.0.0 in a container or on a server (the dashboard has no login: restrict who can reach it)")
+              help="0.0.0.0 in a container or on a server (then AGENTGUARD_DASHBOARD_TOKEN is required)")
 def up(project: str, port: int, no_browser: bool, host: str) -> None:
     """Start the dashboard (default: 127.0.0.1 only)."""
     import uvicorn
 
-    from agentguard.server import create_app
+    from agentguard.server import TOKEN_ENV, create_app, dashboard_token
 
+    if host not in ("127.0.0.1", "localhost", "::1") and not dashboard_token():
+        raise click.ClickException(
+            f"--host {host} makes the dashboard (and your API key) reachable from other machines. "
+            f"Set {TOKEN_ENV} first, e.g. {TOKEN_ENV}=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')")
+    if dashboard_token():
+        click.echo("Login is on: open the dashboard once with ?token=<AGENTGUARD_DASHBOARD_TOKEN>")
     url = f"http://127.0.0.1:{port}"
     click.echo(f"AgentGuard dashboard: {url}  (project: {Path(project).resolve()})  Ctrl+C to stop")
     if not no_browser:
-        threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+        login = f"{url}/?token={dashboard_token()}" if dashboard_token() else url
+        threading.Timer(1.2, lambda: webbrowser.open(login)).start()
     uvicorn.run(create_app(project), host=host, port=port, log_level="warning")
 
 

@@ -27,5 +27,5 @@ RUN uvx --with "pydantic>=2.6,<2.11" semgrep-mcp==0.8.1 --help >/dev/null 2>&1 |
     uvx mcp-server-fetch --help >/dev/null 2>&1 || true
 
 EXPOSE 8765
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/api/a2a', timeout=4)"
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/healthz', timeout=4)"
 CMD ["agentguard", "up", "--project", "/project", "--host", "0.0.0.0", "--port", "8765", "--no-browser"]

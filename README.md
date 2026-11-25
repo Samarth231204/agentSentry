@@ -100,14 +100,22 @@ aws login                         # or aws sso login
 deploy/aws/deploy.sh up           # first time: creates everything, prints the dashboard URL
 deploy/aws/deploy.sh update       # ship new code
 deploy/aws/deploy.sh keys         # .env changed: copy it to SSM and restart
-deploy/aws/deploy.sh allow-ip     # your IP changed (the dashboard has no login, so it is IP-restricted)
+deploy/aws/deploy.sh url          # the dashboard link with your login token
+deploy/aws/deploy.sh allow-ip     # your IP changed (the dashboard is IP-restricted as well as token-protected)
 deploy/aws/deploy.sh stop|start   # stop when not in use: only the disk is billed
 deploy/aws/deploy.sh status|logs
 ```
 
+**Login.** With `--host` other than 127.0.0.1, `agentguard up` refuses to start unless
+`AGENTGUARD_DASHBOARD_TOKEN` is set, so nobody else can start runs on your API key. `deploy.sh` creates a
+random token in `.env` and stores it in SSM with the other keys. Open the dashboard once with `?token=<token>`
+(`deploy.sh url` prints the link): the token goes into an HttpOnly cookie and is removed from the address bar.
+Scripts send `Authorization: Bearer <token>`. `/healthz` is the only path open without it.
+
 There is no SSH port; for a shell use `aws ssm start-session --target <instance id>`. Run results are copied to
 `s3://agentguard-<account>-<region>/runs/` every 5 minutes. The image also runs anywhere else:
-`docker build -t agentguard . && docker run --env-file .env -p 8765:8765 -v "$PWD/../your-project:/project" agentguard`.
+`docker build -t agentguard . && docker run --env-file .env -p 8765:8765 -v "$PWD/../your-project:/project" agentguard`
+(put `AGENTGUARD_DASHBOARD_TOKEN` in `.env` first).
 
 ## Code map
 

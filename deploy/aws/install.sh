@@ -51,7 +51,7 @@ EOF
 systemctl daemon-reload && systemctl enable --now agentguard-sync.timer
 
 for i in $(seq 1 60); do
-  curl -fs http://127.0.0.1:8765/api/a2a >/dev/null && { echo "==> AgentGuard is up on :8765"; exit 0; }
+  curl -fs http://127.0.0.1:8765/healthz >/dev/null && { echo "==> AgentGuard is up on :8765"; exit 0; }
   sleep 2
 done
 echo "AgentGuard did not answer on :8765" >&2; docker logs --tail 50 agentguard >&2; exit 1
