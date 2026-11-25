@@ -1,167 +1,90 @@
-"""Typed contracts shared across AgentGuard's agents and modules.
-
-This is the single source of truth for what a "finding" is. Every other
-module (attackers, judge, classifier, reporters) imports from here instead
-of building its own dict shape.
-"""
+"""Typed data that moves between AgentGuard's steps. Every agent output is one of these models."""
 
 from __future__ import annotations
 
-import time
-import uuid
-from enum import Enum
-from typing import Any, Optional
+from datetime import datetime, timezone
+from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field, computed_field, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 
-class ProbeOutcome(str, Enum):
-    """What kind of thing happened when we sent one probe to the target.
-
-    Produced by agentguard.classifier.classify_response(). This is NOT the
-    same as attack success — a SUCCESS outcome means the target engaged
-    normally with the adversarial input, which is a *prerequisite* for an
-    oracle to detect compromise, not proof of compromise itself.
-    """
-    SUCCESS = "success"                    # target produced a normal, on-topic response
-    REFUSAL = "refusal"                    # the underlying model declined (its own judgment)
-    GUARDRAIL_BLOCK = "guardrail_block"    # an app-level filter blocked the request/response
-    TARGET_RATE_LIMITED = "target_rate_limited"
-    TARGET_ERROR = "target_error"
-    TIMEOUT = "timeout"
-    INCONCLUSIVE = "inconclusive"          # none of the above matched confidently
-
-
-class OracleType(str, Enum):
-    CANARY = "canary"
-    SIDE_EFFECT = "side_effect"
-    LLM_JUDGE = "llm_judge"
-    MANIFEST_DIFF = "manifest_diff"
-    PII = "pii"
-    FINGERPRINT = "fingerprint"
-    RETRIEVAL_INJECTION = "retrieval_injection"
-    GOAL_HIJACK = "goal_hijack"
-    CROSS_SESSION = "cross_session"
-
-
-class AttemptStatus(str, Enum):
-    CONFIRMED = "confirmed"    # a deterministic oracle (canary/side_effect/manifest_diff) fired
-    SUSPECTED = "suspected"    # only the LLM judge believes this succeeded
-    FAILED = "failed"          # no oracle fired, judge says no
-    ERROR = "error"            # attempt could not be completed (target unreachable, etc.)
-
-
-class ToolCallRecord(BaseModel):
-    name: str
-    args: dict[str, Any] = Field(default_factory=dict)
-    timestamp: float = Field(default_factory=time.time)
-
-
-class Turn(BaseModel):
-    """One probe sent, one response received."""
-    sent: str
-    received: Optional[str] = None
-    tool_calls: list[ToolCallRecord] = Field(default_factory=list)
-    outcome: ProbeOutcome = ProbeOutcome.INCONCLUSIVE
-    error: Optional[dict[str, str]] = None  # {"type": ..., "detail": ...}
-
-
-class Finding(BaseModel):
-    """Replaces the loose dict previously appended to FindingsSink.attempts."""
-    id: str = Field(default_factory=lambda: f"finding-{uuid.uuid4().hex[:8]}")
-    category: str
-    capability_targeted: str
-    turns: list[Turn] = Field(default_factory=list)
-    oracle: Optional[OracleType] = None
-    oracle_detail: Optional[str] = None
-    status: AttemptStatus = AttemptStatus.FAILED
-    confidence: float = 0.0  # 0.0-1.0, set by judge.py when oracle == LLM_JUDGE; 1.0 for deterministic oracles
-
-    @computed_field
-    @property
-    def success(self) -> bool:
-        """Backward-compat shim: existing code (reporters.py, cli.py) checks
-        attempt.get('success'). Keep this property so compute_scorecard still
-        works without modification. CONFIRMED and SUSPECTED both count."""
-        return self.status in (AttemptStatus.CONFIRMED, AttemptStatus.SUSPECTED)
-
-    def __getitem__(self, item: str) -> Any:
-        try:
-            return getattr(self, item)
-        except AttributeError:
-            raise KeyError(item)
-
-    def get(self, item: str, default: Any = None) -> Any:
-        return getattr(self, item, default)
-
-
-class Report(BaseModel):
-    scorecard: dict[str, Any]
-    findings: list[Finding]
-    severity: dict[str, str]
-    remediation: dict[str, str]
-    # Filled deterministically by reporters._enrich_report() after the crew
-    # (or the fallback) runs, so every report carries them regardless of
-    # whether the LLM produced them. Defaults keep CrewAI output_pydantic
-    # validation unchanged.
-    owasp: dict[str, str] = Field(default_factory=dict)            # finding id -> OWASP LLM Top 10 entry
-    code_references: dict[str, list[str]] = Field(default_factory=dict)  # finding id -> ["file:line: code"]
-    generated_by: str = "llm"  # "llm" or "deterministic_fallback"
-
-    # Models vary in how they shape these maps (a string where a list is expected, a list or object
-    # where a string is expected). The shape is not the content: normalise instead of discarding
-    # the whole LLM report over it.
-    @field_validator("code_references", mode="before")
-    @classmethod
-    def _refs_as_lists(cls, value: Any) -> Any:
-        if not isinstance(value, dict):
-            return {}
-        out: dict[str, list[str]] = {}
-        for key, refs in value.items():
-            if isinstance(refs, dict):
-                refs = [f"{k}: {_as_text(v)}" for k, v in refs.items()]
-            items = refs if isinstance(refs, list) else [refs]
-            out[str(key)] = [r if isinstance(r, str) else _as_text(r) for r in items if r not in (None, "")]
-        return out
-
-    @field_validator("severity", "remediation", "owasp", mode="before")
-    @classmethod
-    def _values_as_text(cls, value: Any) -> Any:
-        if not isinstance(value, dict):
-            return {}
-        return {str(k): v if isinstance(v, str) else _as_text(v) for k, v in value.items()}
-
-
-def _as_text(value: Any) -> str:
-    if isinstance(value, list):
-        return "\n".join(_as_text(v) for v in value)
-    if isinstance(value, dict):
-        import json
-        return json.dumps(value, ensure_ascii=False)
-    return str(value)
-
-
-class TargetProfile(BaseModel):
-    tools: list[str]
-    has_rag: bool
-    has_memory: bool
-    purpose: Optional[str] = None
-    system_prompt_hint: Optional[str] = None
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 class TraceEvent(BaseModel):
-    """One row in the monitoring event stream. See events.py."""
-    timestamp: float = Field(default_factory=time.time)
-    source: str              # e.g. "attacker.prompt_injection", "judge", "classifier"
-    event_type: str          # e.g. "probe_sent", "probe_received", "llm_call", "budget_warning", "error"
+    """One line of trace.jsonl: who did what, when."""
+    source: str
+    event_type: str
+    timestamp: str = Field(default_factory=_now)
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
-class BudgetUsage(BaseModel):
-    calls: int = 0
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
+# ---- Deterministic scan (the MCP scan_project tool) ------------------------------------------
 
-    @property
-    def total_tokens(self) -> int:
-        return self.prompt_tokens + self.completion_tokens
+class CodeSite(BaseModel):
+    """One place in the user's code: an LLM call, a tool, a prompt or an entry point."""
+    id: str
+    kind: Literal["llm_call", "tool", "prompt", "entry_point"]
+    name: str
+    file: str
+    line: int
+    end_line: int
+    function: str = ""          # enclosing function (qualified name), "" at module level
+    code: str = ""              # the source line(s), trimmed
+    signals: list[str] = Field(default_factory=list)
+
+
+class ScanReport(BaseModel):
+    root: str
+    files_scanned: int = 0
+    frameworks: list[str] = Field(default_factory=list)
+    llm_calls: list[CodeSite] = Field(default_factory=list)
+    tools: list[CodeSite] = Field(default_factory=list)
+    prompts: list[CodeSite] = Field(default_factory=list)
+    entry_points: list[CodeSite] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
+# ---- Search agent output -----------------------------------------------------------------------
+
+Risk = Literal["critical", "high", "medium", "low"]
+
+
+class MainLLMCall(BaseModel):
+    file: str
+    line: int
+    function: str = Field(description="Function that makes the call")
+    entry_point: str = Field(default="", description="Function that receives the end user's message, as file:function")
+    system_prompt: str = Field(default="", description="Where the system prompt is defined, as file:line, or ''")
+    reason: str = Field(description="Why this is the main LLM call")
+
+
+class RiskyTool(BaseModel):
+    name: str
+    file: str
+    line: int
+    risk: Risk
+    capability: str = Field(description="What the tool can do in the real world, e.g. 'moves money'")
+    reason: str = Field(description="Why an attacker would target it")
+    model_can_call: bool = Field(default=True, description="True if the LLM chooses when to call it")
+
+    @field_validator("risk", mode="before")
+    @classmethod
+    def _lower(cls, v: Any) -> Any:
+        return v.lower().strip() if isinstance(v, str) else v
+
+
+class OtherLLMCall(BaseModel):
+    file: str
+    line: int
+    function: str = ""
+    purpose: str = ""
+
+
+class SearchResult(BaseModel):
+    summary: str = Field(description="Two or three sentences: what the agent does and where it is exposed")
+    main_llm_call: Optional[MainLLMCall] = None
+    risky_tools: list[RiskyTool] = Field(default_factory=list)
+    safe_tools: list[str] = Field(default_factory=list, description="Tools that only read harmless data")
+    other_llm_calls: list[OtherLLMCall] = Field(default_factory=list)

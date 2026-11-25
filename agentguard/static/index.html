@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentGuard</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --text: #1b1f24; --muted: #5f6b7a; --line: #e2e6ea;
+  --accent: #2f5bd3; --accent-soft: #e8eefc; --code: #f1f3f6;
+  --crit: #b42318; --crit-soft: #fde8e7; --high: #c2410c; --high-soft: #fdeee3;
+  --med: #a16207; --med-soft: #fbf3dc; --low: #2e7d4f; --low-soft: #e5f4ea;
+  --thought: #6d28d9; --action: #2f5bd3; --obs: #0f766e;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111418; --panel: #1a1e24; --text: #e6e9ed; --muted: #97a1ad; --line: #2c323a;
+    --accent: #7ea2ff; --accent-soft: #1f2a44; --code: #14181d;
+    --crit: #ff8a80; --crit-soft: #3b1d1b; --high: #ffab70; --high-soft: #3a2517;
+    --med: #f2c94c; --med-soft: #352d14; --low: #6fd49a; --low-soft: #17301f;
+    --thought: #b69cff; --action: #7ea2ff; --obs: #5fd4c4;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; background: var(--panel);
+  border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+header h1 { font-size: 17px; margin: 0; }
+header .meta { color: var(--muted); font-size: 12.5px; display: flex; gap: 14px; flex-wrap: wrap; flex: 1; }
+button { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 8px 14px;
+  font-weight: 600; cursor: pointer; font-size: 13px; }
+button:disabled { opacity: .5; cursor: default; }
+button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+.layout { display: grid; grid-template-columns: 250px 1fr; min-height: calc(100vh - 54px); }
+aside { border-right: 1px solid var(--line); padding: 12px; background: var(--panel); }
+aside h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 4px 4px 8px; }
+.run-item { padding: 8px 10px; border-radius: 6px; cursor: pointer; margin-bottom: 2px; }
+.run-item:hover { background: var(--accent-soft); }
+.run-item.sel { background: var(--accent-soft); outline: 1px solid var(--accent); }
+.run-item .id { font-size: 12px; }
+.run-item .sub { font-size: 11.5px; color: var(--muted); }
+main { padding: 18px 22px; min-width: 0; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+.panel h2 { font-size: 15px; margin: 0 0 10px; }
+.panel h3 { font-size: 13px; margin: 14px 0 6px; color: var(--muted); }
+.muted { color: var(--muted); }
+.small { font-size: 12.5px; }
+.steps { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.step { flex: 1; min-width: 150px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.step .t { font-weight: 600; }
+.step .d { font-size: 12px; color: var(--muted); }
+.step.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.step.done .t::before { content: "✓ "; color: var(--low); }
+.step.failed { border-color: var(--crit); }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 8px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 12px; color: var(--muted); font-weight: 600; }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11.5px; font-weight: 700; text-transform: uppercase; }
+.critical { color: var(--crit); background: var(--crit-soft); }
+.high { color: var(--high); background: var(--high-soft); }
+.medium { color: var(--med); background: var(--med-soft); }
+.low { color: var(--low); background: var(--low-soft); }
+.status-done { color: var(--low); } .status-failed, .status-stopped { color: var(--crit); } .status-running { color: var(--accent); }
+.kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 12px; }
+.kv div:nth-child(odd) { color: var(--muted); }
+.loc { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; background: var(--code); padding: 1px 6px; border-radius: 4px; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 14px; flex-wrap: wrap; }
+.tab { padding: 8px 12px; cursor: pointer; border-bottom: 2px solid transparent; color: var(--muted); font-weight: 600; }
+.tab.sel { color: var(--text); border-bottom-color: var(--accent); }
+.ev { border-left: 3px solid var(--line); padding: 6px 10px; margin: 6px 0; background: var(--panel); border-radius: 0 6px 6px 0; }
+.ev .h { font-size: 12px; font-weight: 700; display: flex; gap: 8px; align-items: center; }
+.ev .h .tm { margin-left: auto; color: var(--muted); font-weight: 400; }
+.ev pre { margin: 4px 0 0; white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto;
+  background: var(--code); padding: 8px; border-radius: 4px; }
+.ev.thought { border-left-color: var(--thought); } .ev.thought .h { color: var(--thought); }
+.ev.action { border-left-color: var(--action); } .ev.action .h { color: var(--action); }
+.ev.observation { border-left-color: var(--obs); } .ev.observation .h { color: var(--obs); }
+.ev.mcp { border-left-color: var(--muted); } .ev.flow { border-left-color: var(--accent); }
+.ev.error { border-left-color: var(--crit); } .ev.error .h { color: var(--crit); }
+.ev.answer { border-left-color: var(--low); } .ev.answer .h { color: var(--low); }
+.filters { display: flex; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; font-size: 12.5px; }
+.empty { text-align: center; padding: 60px 20px; color: var(--muted); }
+.err { color: var(--crit); background: var(--crit-soft); padding: 10px 12px; border-radius: 6px; white-space: pre-wrap; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.stat { background: var(--code); border-radius: 6px; padding: 10px; }
+.stat .n { font-size: 20px; font-weight: 700; }
+.stat .l { font-size: 12px; color: var(--muted); }
+.scroll-x { overflow-x: auto; }
+@media (max-width: 760px) {
+  .layout { grid-template-columns: 1fr; }
+  aside { border-right: 0; border-bottom: 1px solid var(--line); max-height: 200px; overflow: auto; }
+  main { padding: 14px 16px; }
+  .kv { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>🛡️ AgentGuard</h1>
+  <div class="meta" id="meta">Loading…</div>
+  <button id="startBtn" onclick="startRun()">Run Search agent</button>
+</header>
+<div class="layout">
+  <aside>
+    <h2>Runs</h2>
+    <div id="runs"><div class="muted small">No runs yet.</div></div>
+  </aside>
+  <main id="main"><div class="empty">Start a run to find the main LLM call and the risky tools in your project.</div></main>
+</div>
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+let status = {}, selected = null, events = [], source = null, tab = "result";
+let show = { thought: true, action: true, observation: true, mcp: false, flow: true };
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.detail || r.statusText);
+  return body;
+}
+
+async function loadStatus() {
+  status = await api("/api/status");
+  $("#meta").innerHTML = `<span>Project <span class="mono">${esc(status.project)}</span></span>
+    <span>Model <span class="mono">${esc(status.model)}</span></span>
+    <span>Key ${status.has_key ? "✓" : "<b style='color:var(--crit)'>missing</b>"}</span>
+    <span>Semgrep MCP ${status.semgrep === "ok" ? "✓" : `<span title="${esc(status.semgrep)}">unavailable</span>`}</span>`;
+  $("#startBtn").disabled = !!status.active_run || !status.has_key;
+}
+
+async function loadRuns() {
+  const list = await api("/api/runs");
+  $("#runs").innerHTML = list.length ? list.map((r) => `
+    <div class="run-item ${r.id === selected ? "sel" : ""}" onclick="selectRun('${r.id}')">
+      <div class="id mono">${esc(r.id.replace("run-", ""))}</div>
+      <div class="sub"><span class="status-${r.status}">${esc(r.status)}</span> · ${new Date(r.started * 1000).toLocaleString()}</div>
+    </div>`).join("") : `<div class="muted small">No runs yet.</div>`;
+  return list;
+}
+
+async function startRun() {
+  try {
+    $("#startBtn").disabled = true;
+    const { id } = await api("/api/runs", { method: "POST" });
+    await loadRuns(); selectRun(id);
+  } catch (e) { alert(e.message); }
+  loadStatus();
+}
+
+async function resumeRun(id) {
+  try { await api(`/api/runs/${id}/resume`, { method: "POST" }); selectRun(id); }
+  catch (e) { alert(e.message); }
+  loadStatus();
+}
+
+function selectRun(id) {
+  selected = id; events = [];
+  if (source) source.close();
+  source = new EventSource(`/api/runs/${id}/events`);
+  source.onmessage = (m) => { events.push(JSON.parse(m.data)); if (tab === "trace") renderTrace(); renderSteps(); };
+  source.addEventListener("end", async () => { source.close(); source = null; await refresh(); loadStatus(); loadRuns(); });
+  refresh(); loadRuns();
+}
+
+let run = null;
+async function refresh() {
+  if (!selected) return;
+  run = await api(`/api/runs/${selected}`);
+  render();
+}
+
+function stepState(name) {
+  const order = ["scan", "search", "save"];
+  const live = [...events].reverse().find((e) => e.event_type === "step_started");
+  const cur = run.status === "done" || events.some((e) => e.event_type === "run_done") ? "done"
+    : (live ? live.payload.step : run.step);
+  if (cur === "done") return "done";
+  const i = order.indexOf(name), j = order.indexOf(cur);
+  if (i < j) return "done";
+  if (i === j) return ["failed", "stopped"].includes(run.status) ? "failed" : "active";
+  return "";
+}
+
+function renderSteps() {
+  if (!run || !$("#steps")) return;
+  const scanDone = events.find((e) => e.event_type === "scan_done");
+  const actions = events.filter((e) => e.event_type === "action").length;
+  const s = [
+    ["scan", "1 · Scan", scanDone ? `${scanDone.payload.llm_calls} LLM calls, ${scanDone.payload.tools} tools (MCP scan_project)` : "MCP agentguard-scan: scan_project"],
+    ["search", "2 · Search agent", `ReAct loop · ${actions} action${actions === 1 ? "" : "s"}`],
+    ["save", "3 · Save", "search.json"],
+  ];
+  $("#steps").innerHTML = s.map(([k, t, d]) => `<div class="step ${stepState(k)}"><div class="t">${t}</div><div class="d">${esc(d)}</div></div>`).join("");
+}
+
+function render() {
+  const dur = run.finished ? ((run.finished - run.started) | 0) + " s" : "running…";
+  $("#main").innerHTML = `
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap">
+      <h2 style="margin:0;font-size:16px" class="mono">${esc(run.id)}</h2>
+      <span class="status-${run.status}"><b>${esc(run.status)}</b></span>
+      <span class="muted small">${dur} · ${esc(run.model)}</span>
+      ${["failed", "stopped"].includes(run.status) ? `<button class="ghost" onclick="resumeRun('${run.id}')">Resume from checkpoint</button>` : ""}
+    </div>
+    ${run.error ? `<div class="err" style="margin-bottom:14px">${esc(run.error)}</div>` : ""}
+    <div class="steps" id="steps"></div>
+    <div class="tabs">${[["result", "Result"], ["trace", "ReAct trace"], ["scan", "Scan"], ["state", "Checkpoints & usage"]]
+      .map(([k, l]) => `<div class="tab ${tab === k ? "sel" : ""}" onclick="setTab('${k}')">${l}</div>`).join("")}</div>
+    <div id="tab"></div>`;
+  renderSteps(); renderTab();
+}
+
+function setTab(t) { tab = t; render(); }
+function renderTab() {
+  ({ result: renderResult, trace: renderTrace, scan: renderScan, state: renderState })[tab]();
+}
+
+function renderResult() {
+  const r = run.search;
+  if (!r) { $("#tab").innerHTML = `<div class="panel muted">${run.status === "running" ? "The Search agent is working. Open the ReAct trace tab to watch it." : "No result."}</div>`; return; }
+  const m = r.main_llm_call;
+  $("#tab").innerHTML = `
+    <div class="panel"><h2>Summary</h2><p style="margin:0">${esc(r.summary)}</p></div>
+    <div class="panel"><h2>Main LLM call</h2>${m ? `<div class="kv">
+      <div>Call</div><div><span class="loc">${esc(m.file)}:${m.line}</span> in <code>${esc(m.function)}()</code></div>
+      <div>Entry point</div><div><span class="loc">${esc(m.entry_point || "—")}</span></div>
+      <div>System prompt</div><div><span class="loc">${esc(m.system_prompt || "—")}</span></div>
+      <div>Why</div><div>${esc(m.reason)}</div></div>` : `<p class="muted">No LLM call found.</p>`}</div>
+    <div class="panel"><h2>Risky tools (${r.risky_tools.length})</h2><div class="scroll-x"><table>
+      <thead><tr><th>Risk</th><th>Tool</th><th>Where</th><th>Can do</th><th>Why an attacker wants it</th></tr></thead>
+      <tbody>${r.risky_tools.map((t) => `<tr><td><span class="badge ${esc(t.risk)}">${esc(t.risk)}</span></td>
+        <td><b>${esc(t.name)}</b>${t.model_can_call ? "" : `<div class="small muted">not model-callable</div>`}</td>
+        <td><span class="loc">${esc(t.file)}:${t.line}</span></td><td>${esc(t.capability)}</td><td class="small">${esc(t.reason)}</td></tr>`).join("")
+        || `<tr><td colspan="5" class="muted">None found.</td></tr>`}</tbody></table></div>
+      ${r.safe_tools.length ? `<h3>Safe tools</h3>${r.safe_tools.map((t) => `<code>${esc(t)}</code>`).join(", ")}` : ""}
+      ${r.other_llm_calls.length ? `<h3>Other LLM calls</h3><table><tbody>${r.other_llm_calls.map((c) =>
+        `<tr><td><span class="loc">${esc(c.file)}:${c.line}</span></td><td>${esc(c.function)}</td><td>${esc(c.purpose)}</td></tr>`).join("")}</tbody></table>` : ""}
+    </div>`;
+}
+
+function kindOf(e) {
+  if (e.source === "mcp") return "mcp";
+  if (e.event_type === "thought") return "thought";
+  if (e.event_type === "action") return "action";
+  if (e.event_type === "observation") return "observation";
+  if (e.event_type === "error") return "error";
+  if (e.event_type === "final_answer" || e.event_type === "task_done") return "answer";
+  return "flow";
+}
+
+function renderTrace() {
+  if (tab !== "trace") return;
+  const el = $("#tab");
+  const atBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 40;
+  const shown = events.filter((e) => { const k = kindOf(e); return k === "error" || k === "answer" || show[k]; })
+    .filter((e) => !["llm_call", "usage", "task_done"].includes(e.event_type));
+  el.innerHTML = `<div class="filters">${Object.keys(show).map((k) =>
+      `<label><input type="checkbox" ${show[k] ? "checked" : ""} onchange="show['${k}']=this.checked;renderTrace()"> ${k === "mcp" ? "MCP calls" : k}</label>`).join("")}</div>
+    ${shown.map(renderEvent).join("") || `<div class="muted">Waiting for events…</div>`}`;
+  if (atBottom && run && run.status === "running") window.scrollTo(0, document.body.scrollHeight);
+}
+
+function renderEvent(e) {
+  const k = kindOf(e), p = e.payload, tm = new Date(e.timestamp).toLocaleTimeString();
+  let title = e.event_type, body = "";
+  if (k === "thought") { title = "Thought"; body = p.text; }
+  else if (k === "action") { title = `Action · ${esc(p.tool)}`; body = p.input; }
+  else if (k === "observation") { title = `Observation · ${esc(p.tool)}`; body = p.error || p.text; }
+  else if (k === "mcp") { title = `MCP ${e.event_type.replace("mcp_", "")} · ${esc(p.server)} / ${esc(p.tool)}`;
+    body = e.event_type === "mcp_tool_result" ? `${p.latency_ms} ms\n${p.preview || ""}` : (p.error || (p.argument_names || []).join(", ")); }
+  else if (k === "answer") { title = e.event_type === "final_answer" ? "Final answer" : "Task done"; body = p.text || p.summary; }
+  else if (k === "error") { title = "Error"; body = p.error + (p.trace ? "\n\n" + p.trace : ""); }
+  else { body = JSON.stringify(p, null, 1).replace(/^{\n|\n}$/g, ""); }
+  return `<div class="ev ${k}"><div class="h">${title}<span class="tm">${tm}</span></div>${body ? `<pre>${esc(body)}</pre>` : ""}</div>`;
+}
+
+function renderScan() {
+  const s = run.scan;
+  if (!s) { $("#tab").innerHTML = `<div class="panel muted">No scan yet.</div>`; return; }
+  const table = (items) => items.length ? `<div class="scroll-x"><table><thead><tr><th>Name</th><th>Where</th><th>Signals</th><th>Code</th></tr></thead><tbody>${
+    items.map((i) => `<tr><td><b>${esc(i.name)}</b>${i.function ? `<div class="small muted">in ${esc(i.function)}()</div>` : ""}</td>
+      <td><span class="loc">${esc(i.file)}:${i.line}</span></td><td class="small">${esc(i.signals.join(", "))}</td>
+      <td><code>${esc((i.code || "").split("\n")[0].slice(0, 120))}</code></td></tr>`).join("")}</tbody></table></div>` : `<p class="muted small">None found.</p>`;
+  $("#tab").innerHTML = `<div class="panel"><h2>Deterministic scan (MCP tool scan_project)</h2>
+    <p class="small muted">${s.files_scanned} Python files read without running them. Frameworks: ${esc(s.frameworks.join(", ") || "none recognised")}.
+    This is the hint list the Search agent starts from.</p>
+    <h3>LLM calls</h3>${table(s.llm_calls)}<h3>Tools</h3>${table(s.tools)}
+    <h3>Prompts</h3>${table(s.prompts)}<h3>Functions that take a message</h3>${table(s.entry_points)}
+    ${s.errors.length ? `<h3>Parse errors</h3><pre>${esc(s.errors.join("\n"))}</pre>` : ""}</div>`;
+}
+
+function renderState() {
+  const u = run.usage || {};
+  const mcp = events.filter((e) => e.event_type === "mcp_tool_result");
+  const by = {};
+  mcp.forEach((e) => { const k = e.payload.server; by[k] = (by[k] || 0) + 1; });
+  $("#tab").innerHTML = `<div class="panel"><h2>Usage</h2><div class="grid2">
+      <div class="stat"><div class="n">${u.successful_requests ?? "—"}</div><div class="l">model requests</div></div>
+      <div class="stat"><div class="n">${u.prompt_tokens ?? "—"}</div><div class="l">prompt tokens</div></div>
+      <div class="stat"><div class="n">${u.completion_tokens ?? "—"}</div><div class="l">completion tokens</div></div>
+      ${Object.entries(by).map(([k, n]) => `<div class="stat"><div class="n">${n}</div><div class="l">MCP calls · ${esc(k)}</div></div>`).join("")}
+    </div></div>
+    <div class="panel"><h2>Checkpoints (${run.checkpoints.length})</h2>
+      <p class="small muted">CrewAI checkpoints in <span class="mono">checkpoints.db</span> (SQLite): one after every flow step and every crew task.
+      A failed or stopped run resumes from the newest one and skips the steps already finished.</p>
+      <table><thead><tr><th>Checkpoint</th><th>Created</th><th>Parent</th></tr></thead><tbody>${run.checkpoints.map((c) =>
+        `<tr><td class="mono">${esc(c.id)}</td><td class="small">${esc(c.created_at)}</td><td class="mono small">${esc(c.parent_id || "—")}</td></tr>`).join("")
+        || `<tr><td colspan="3" class="muted">None yet.</td></tr>`}</tbody></table></div>`;
+}
+
+(async () => {
+  await loadStatus();
+  const list = await loadRuns();
+  if (status.active_run) selectRun(status.active_run);
+  else if (list.length) selectRun(list[0].id);
+})();
+</script>
+</body>
+</html>

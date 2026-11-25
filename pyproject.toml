@@ -1,7 +1,7 @@
 [project]
 name = "agentguard"
-version = "0.2.0"
-description = "Automated red-teaming for AI agent applications"
+version = "0.3.0"
+description = "Finds and red-teams the vulnerable parts of an AI agent"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -11,13 +11,9 @@ dependencies = [
     "httpx>=0.27",
     "click>=8.1",
     "pyyaml>=6.0",
-    "tenacity>=8.2",
-    "google-adk",
     "litellm>=1.95,<1.106",
     "mcp>=1.28,<2.0",
-    "chromadb",
-    # Pinned: older crewai (e.g. 1.6.1, which pip can backtrack to) lacks
-    # crewai.llms.cache, which reporters.py patches. Bump only after re-testing.
+    # Pinned: checkpointing (crewai.state) and the LLM patch in llm.py are tested on this version.
     "crewai==1.15.22",
 ]
 
@@ -39,7 +35,7 @@ build-backend = "setuptools.build_meta"
 include = ["agentguard*"]
 
 [tool.setuptools.package-data]
-agentguard = ["probes/*.yaml", "discovery/rules/*.yaml", "server/static/*", "server/static/**/*"]
+agentguard = ["static/*"]
 
 [tool.pytest.ini_options]
 filterwarnings = [

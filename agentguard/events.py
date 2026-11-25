@@ -1,17 +1,13 @@
-"""Minimal pub/sub event bus for run-time monitoring.
+"""Event bus: every agent thought, tool call, MCP call and step goes through emit().
 
-Phase 1 only needs: something can emit() a TraceEvent, something can
-subscribe() to receive them, and one default subscriber persists them to
-disk. Deeper integration (wiring this into every ADK/CrewAI callback) is
-Phase 2 — do not add that here.
+A run subscribes a JSONL sink (trace.jsonl) and the dashboard reads that file live.
 """
 
 from __future__ import annotations
 
-import json
 import threading
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from agentguard.schemas import TraceEvent
 
@@ -38,22 +34,20 @@ class EventBus:
         for fn in subs:
             try:
                 fn(event)
-            except Exception:
-                # A broken subscriber must never crash the run.
+            except Exception:  # noqa: BLE001  a broken subscriber must never crash the run
                 pass
 
 
 class JSONLFileSink:
-    """Subscriber that appends each event as one JSON line to a file."""
+    """Appends each event as one JSON line."""
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self._lock = threading.Lock()
 
     def __call__(self, event: TraceEvent) -> None:
-        with self._lock:
-            with open(self.path, "a", encoding="utf-8") as f:
-                f.write(event.model_dump_json() + "\n")
+        with self._lock, open(self.path, "a", encoding="utf-8") as f:
+            f.write(event.model_dump_json() + "\n")
 
 
 _global_bus: Optional[EventBus] = None
@@ -64,6 +58,10 @@ def get_event_bus() -> EventBus:
     if _global_bus is None:
         _global_bus = EventBus()
     return _global_bus
+
+
+def emit(source: str, event_type: str, **payload: Any) -> None:
+    get_event_bus().emit(TraceEvent(source=source, event_type=event_type, payload=payload))
 
 
 def reset_event_bus() -> None:

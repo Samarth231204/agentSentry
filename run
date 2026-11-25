@@ -12,6 +12,7 @@
 #
 # Test a sub-folder instead (e.g. one app of several):   ./AgentGuard/run path/to/app
 # Other options go to `agentguard up`:                   ./AgentGuard/run --port 8800 --no-browser
+# Terminal only, no dashboard:                          AGENTGUARD_CMD=scan ./AgentGuard/run
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -81,12 +82,15 @@ if [ ${#REQS[@]} -gt 0 ]; then
   fi
 fi
 
-# 3. Keep AgentGuard out of your project's git (safe to repeat)
-if ! grep -qx "bootstrapped=$PROJECT" "$STATE"; then
-  "$VENV/bin/agentguard" bootstrap --project "$PROJECT" | grep -v "^Next:" || true
-  echo "bootstrapped=$PROJECT" >> "$STATE"
+# 3. Keep AgentGuard and its run data out of your project's git (local exclude, safe to repeat)
+if [ -d "$PROJECT/.git" ]; then
+  EXCLUDE="$PROJECT/.git/info/exclude"; mkdir -p "$(dirname "$EXCLUDE")"; touch "$EXCLUDE"
+  CLONE="$(basename "$HERE")"
+  for entry in "/$CLONE/" "/.agentguard/"; do
+    grep -qxF "$entry" "$EXCLUDE" || echo "$entry" >> "$EXCLUDE"
+  done
 fi
 
 # 4. Start
 say "Starting AgentGuard for $PROJECT"
-exec "$VENV/bin/agentguard" up --project "$PROJECT" "$@"
+exec "$VENV/bin/agentguard" "${AGENTGUARD_CMD:-up}" --project "$PROJECT" "$@"

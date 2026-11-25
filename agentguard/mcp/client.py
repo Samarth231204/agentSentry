@@ -8,6 +8,7 @@ dashboard's MCP panel is built from these events.
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -17,10 +18,8 @@ from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamablehttp_client
 
 from agentguard.events import get_event_bus
-from agentguard.logging import get_logger
 from agentguard.schemas import TraceEvent
 
-logger = get_logger("mcp.client")
 PREVIEW_CHARS = 300
 
 
@@ -62,7 +61,8 @@ async def _session(spec: ServerSpec):
     if spec.transport == "http":
         return streamablehttp_client(spec.url)
     params = StdioServerParameters(command=spec.command[0], args=spec.command[1:], env=spec.env)
-    return stdio_client(params)
+    # The child's stderr (server logs, banners) would flood the terminal; drop it.
+    return stdio_client(params, errlog=open(os.devnull, "w"))
 
 
 async def _with_session(spec: ServerSpec, fn, timeout: float):
