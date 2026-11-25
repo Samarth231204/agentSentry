@@ -119,6 +119,7 @@ class Probe(BaseModel):
     tool_calls: list[ToolCall] = Field(default_factory=list)
     error: str = ""
     latency_ms: float = 0
+    web_reads: list[str] = Field(default_factory=list, description="Trap pages ('page:<id>') and beacons ('beacon:<id>') the target opened")
     flags: list[str] = Field(default_factory=list)   # guardrail flags on the target's reply
 
 
@@ -134,6 +135,7 @@ class AttackFinding(BaseModel):
     detail: str = Field(default="", description="Why the oracle (or the attacker) says it worked")
     oracle: str = ""
     probes: list[Probe] = Field(default_factory=list)
+    techniques: list[str] = Field(default_factory=list, description="Payload-library techniques and disguises the attack agent used")
     evidence: Optional[int] = Field(default=None, description="Index of the probe that proves it")
 
 

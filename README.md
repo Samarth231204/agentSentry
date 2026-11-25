@@ -23,7 +23,11 @@ AgentGuard flow  (CrewAI Flow, checkpointed to SQLite after every step)
                       semgrep_search                        external MCP server (official semgrep-mcp)
              guardrail: every file:line and entry point must exist, or the agent must fix its answer
              output: SearchResult (Pydantic) → search.json  entry points, main LLM call, risky tools
-  3. attack  10 ADK attack agents (Haiku 5.5), one per attack type, one after another
+  3. attack  11 ADK attack agents (Haiku 5.5), one per attack type, one after another
+               tools: get_payloads, disguise               our MCP server (agentguard-payloads): proven
+                                                           techniques + disguises (base64, homoglyphs, ...)
+                      plant_web_page, preview_page          trap web server + external MCP server (official
+                                                           mcp-server-fetch, locked to the trap server)
                each talks to a SANDBOX: a throwaway copy of the project in its own process, whose model
                calls are redirected to AgentGuard's model and key and whose acting tools (pay, send,
                grant, run, SQL) are intercepted in memory: recorded, faked, never really run
@@ -33,7 +37,8 @@ AgentGuard flow  (CrewAI Flow, checkpointed to SQLite after every step)
 ```
 
 Attack types: prompt injection, secret extraction, tool misuse, data exfiltration, privilege escalation,
-RAG poisoning, memory persistence, unsafe command execution, SQL injection, insecure output handling.
+RAG poisoning, memory persistence, unsafe command execution, SQL injection, insecure output handling, and
+indirect prompt injection through a web page (only when the app has a tool that reads web pages).
 
 Each run lives in `your-project/.agentguard/runs/<run-id>/`:
 - `search.json`, the Search agent's result
@@ -42,6 +47,7 @@ Each run lives in `your-project/.agentguard/runs/<run-id>/`:
 - `checkpoints.db`, the CrewAI checkpoints
 - `adk_sessions.db`, the ADK attack agents' sessions (every event saved)
 - `sandbox/`, the project copy and its log
+- `trap_pages/`, the web pages planted for indirect injection
 
 A failed or stopped run resumes from its last checkpoint.
 
@@ -65,6 +71,8 @@ A failed or stopped run resumes from its last checkpoint.
 | `agentguard/sandbox/harness.py`, `runner.py` | Runs the project copy; model redirection; tool interception |
 | `agentguard/attack/categories.py`, `team.py` | The 10 attack types; the ADK attack agents, callbacks and checkpoints |
 | `agentguard/attack/oracles.py` | Code that confirms each attack type |
+| `agentguard/attack/payloads.py`, `mcp/payload_server.py` | The payload library and its MCP server |
+| `agentguard/attack/trap.py`, `mcp/fetch.py` | Trap web server for planted pages; the official Fetch MCP server |
 | `agentguard/guardrails.py` | Injection and toxicity checks, untrusted fencing, type checks |
 | `agentguard/observability.py` | LangFuse tracing (optional) |
 | `agentguard/schemas.py` | Pydantic models: `ScanReport`, `SearchResult`, `AttackReport`, `TraceEvent` |
@@ -74,7 +82,9 @@ A failed or stopped run resumes from its last checkpoint.
 
 - Python 3.10+
 - An Anthropic API key
-- For Semgrep: [uv](https://docs.astral.sh/uv/) and `uv tool install semgrep`. Without them the agent uses `search_code` only.
+- [uv](https://docs.astral.sh/uv/), for the external MCP servers (started with `uvx`):
+  - Semgrep: also `uv tool install semgrep`. Without it the Search agent uses `search_code` only.
+  - Fetch (`mcp-server-fetch`): downloaded by `uvx` on first use.
 
 Only Python projects are supported for now. The project's agent must call its model through LiteLLM or the
 OpenAI SDK (so AgentGuard can give it its own key), or read a key from the environment.

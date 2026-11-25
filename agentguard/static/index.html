@@ -81,6 +81,7 @@ th { font-size: 12px; color: var(--muted); font-weight: 600; }
 .ev.error { border-left-color: var(--crit); } .ev.error .h { color: var(--crit); }
 .ev.answer { border-left-color: var(--low); } .ev.answer .h { color: var(--low); }
 .ev.probe { border-left-color: var(--high); } .ev.probe .h { color: var(--high); }
+.ev.trap { border-left-color: var(--crit); } .ev.trap .h { color: var(--crit); }
 .ev.guardrail { border-left-color: var(--med); } .ev.guardrail .h { color: var(--med); }
 .att { border: 1px solid var(--line); border-radius: 8px; margin-bottom: 10px; background: var(--panel); }
 .att > summary { padding: 10px 14px; cursor: pointer; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
@@ -126,7 +127,7 @@ th { font-size: 12px; color: var(--muted); font-weight: 600; }
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 let status = {}, selected = null, events = [], source = null, tab = "attacks";
-let show = { thought: true, action: true, observation: true, probe: true, guardrail: true, mcp: false, flow: true };
+let show = { thought: true, action: true, observation: true, probe: true, guardrail: true, trap: true, mcp: false, flow: true };
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -208,7 +209,7 @@ function renderSteps() {
     ["scan", "1 · Scan", scanDone ? `${scanDone.payload.llm_calls} LLM calls, ${scanDone.payload.tools} tools (MCP scan_project)` : "MCP agentguard-scan: scan_project"],
     ["search", "2 · Search agent", `CrewAI ReAct · ${actions} action${actions === 1 ? "" : "s"}`],
     ["attack", "3 · Attack", probes.length ? `ADK · ${probes.length} probes, ${hits} confirmed${catNow && run.status === "running" ? " · now: " + catNow.payload.title : ""}`
-      : (run.attacks ? `${run.attacks.confirmed} confirmed of ${run.attacks.findings.length}` : "10 ADK attack agents vs sandbox")],
+      : (run.attacks ? `${run.attacks.confirmed} confirmed of ${run.attacks.findings.length}` : "11 ADK attack agents vs sandbox")],
   ];
   $("#steps").innerHTML = s.map(([k, t, d]) => `<div class="step ${stepState(k)}"><div class="t">${t}</div><div class="d">${esc(d)}</div></div>`).join("");
 }
@@ -274,7 +275,8 @@ function renderAttacks() {
       <span class="st ${f.status}">${f.status.replace("_", " ")}</span><b>${esc(f.title)}</b>
       <span class="small muted">${esc(f.owasp)}</span><span class="small muted" style="margin-left:auto">${f.probes.length} probe${f.probes.length === 1 ? "" : "s"}${f.entry_point ? " · " + esc(f.entry_point) : ""}</span></summary>
       <div class="body">${f.detail ? `<p style="margin-top:0"><b>${f.status === "confirmed" ? "Proof" : "Note"}:</b> ${esc(f.detail)}</p>` : ""}
-      ${f.probes.map((p, i) => `<div class="probe ${i === f.evidence ? "hit" : ""}"><div class="small muted">probe ${i + 1} → ${esc(p.entry_point)} as ${esc(p.session)}${i === f.evidence ? " · <b style='color:var(--crit)'>evidence</b>" : ""}${p.flags.length ? " · guardrail flags: " + esc(p.flags.join(", ")) : ""}</div>
+      ${(f.techniques || []).length ? `<p class="small"><b>Techniques used</b> (payload library, disguises, hidden-page styles): ${f.techniques.map((t) => `<span class="tag">${esc(t)}</span>`).join(" ")}</p>` : ""}
+      ${f.probes.map((p, i) => `<div class="probe ${i === f.evidence ? "hit" : ""}"><div class="small muted">probe ${i + 1} → ${esc(p.entry_point)} as ${esc(p.session)}${i === f.evidence ? " · <b style='color:var(--crit)'>evidence</b>" : ""}${p.flags.length ? " · guardrail flags: " + esc(p.flags.join(", ")) : ""}${(p.web_reads || []).length ? " · <b>web pages opened:</b> " + esc(p.web_reads.join(", ")) : ""}</div>
         <pre><b>attacker:</b> ${esc(p.message)}</pre><pre><b>target:</b> ${esc(p.reply || p.error || "(empty)")}</pre>
         ${p.tool_calls.length ? `<pre><b>tools called:</b>\n${esc(p.tool_calls.map((c) => `${c.name}(${JSON.stringify(c.args)})${c.intercepted ? "  [intercepted]" : "  → " + c.result.slice(0, 120)}`).join("\n"))}</pre>` : ""}</div>`).join("")}
       </div></details>`).join("")}`;
@@ -283,6 +285,7 @@ function renderAttacks() {
 function kindOf(e) {
   if (e.source === "mcp") return "mcp";
   if (e.source === "guardrail") return "guardrail";
+  if (e.source === "trap") return "trap";
   if (e.event_type === "probe") return "probe";
   if (e.event_type === "thought") return "thought";
   if (e.event_type === "action") return "action";
@@ -299,7 +302,7 @@ function renderTrace() {
   const shown = events.filter((e) => { const k = kindOf(e); return k === "error" || k === "answer" || show[k]; })
     .filter((e) => !["llm_call", "usage", "task_done", "context"].includes(e.event_type));
   el.innerHTML = `<div class="filters">${Object.keys(show).map((k) =>
-      `<label><input type="checkbox" ${show[k] ? "checked" : ""} onchange="show['${k}']=this.checked;renderTrace()"> ${k === "mcp" ? "MCP calls" : k}</label>`).join("")}</div>
+      `<label><input type="checkbox" ${show[k] ? "checked" : ""} onchange="show['${k}']=this.checked;renderTrace()"> ${k === "mcp" ? "MCP calls" : k === "trap" ? "trap pages" : k}</label>`).join("")}</div>
     ${shown.map(renderEvent).join("") || `<div class="muted">Waiting for events…</div>`}`;
   if (atBottom && run && run.status === "running") window.scrollTo(0, document.body.scrollHeight);
 }
@@ -311,6 +314,8 @@ function renderEvent(e) {
   if (k === "thought") { title = "Thought" + who; body = p.text; }
   else if (k === "probe") { title = `Probe · ${esc(p.category)} → ${esc(p.entry_point)} (${esc(p.session)})${p.confirmed ? " · CONFIRMED" : ""}`;
     body = `ATTACKER: ${p.message}\n\nTARGET: ${p.reply || p.error}${(p.tool_calls || []).length ? "\n\nTOOLS: " + p.tool_calls.map((c) => `${c.name}(${JSON.stringify(c.args)})${c.intercepted ? " [intercepted]" : ""}`).join("\n       ") : ""}${p.confirmed ? "\n\nORACLE: " + p.detail : ""}`; }
+  else if (k === "trap") { title = e.event_type === "page_planted" ? `Trap page planted · ${esc(p.style)}` : `Trap · target opened ${esc(p.kind)} ${esc(p.id)}`;
+    body = e.event_type === "page_planted" ? `${p.title}\nhidden: ${p.hidden}` : p.agent; }
   else if (k === "guardrail") { title = `Guardrail · ${esc(e.event_type)}`; body = JSON.stringify(p, null, 1); }
   else if (k === "action") { title = `Action · ${esc(p.tool)}${who}`; body = p.input; }
   else if (k === "observation") { title = `Observation · ${esc(p.tool)}${who}`; body = p.error || p.text; }
