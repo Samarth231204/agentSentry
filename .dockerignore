@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+.git
+.venv
+venv
+.agentguard
+.claude
+IMPLEMENTATION_PLAN.md
+build
+dist
+*.egg-info
+__pycache__
+*.pyc
+.pytest_cache
+tests
+deploy

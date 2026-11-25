@@ -23,8 +23,10 @@ def main(ctx: click.Context) -> None:
 @click.option("--project", default=".", type=click.Path(exists=True, file_okay=False), help="Project to test")
 @click.option("--port", default=8765, show_default=True)
 @click.option("--no-browser", is_flag=True)
-def up(project: str, port: int, no_browser: bool) -> None:
-    """Start the dashboard on 127.0.0.1."""
+@click.option("--host", default="127.0.0.1", show_default=True,
+              help="0.0.0.0 in a container or on a server (the dashboard has no login: restrict who can reach it)")
+def up(project: str, port: int, no_browser: bool, host: str) -> None:
+    """Start the dashboard (default: 127.0.0.1 only)."""
     import uvicorn
 
     from agentguard.server import create_app
@@ -33,7 +35,7 @@ def up(project: str, port: int, no_browser: bool) -> None:
     click.echo(f"AgentGuard dashboard: {url}  (project: {Path(project).resolve()})  Ctrl+C to stop")
     if not no_browser:
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()
-    uvicorn.run(create_app(project), host="127.0.0.1", port=port, log_level="warning")
+    uvicorn.run(create_app(project), host=host, port=port, log_level="warning")
 
 
 @main.command()
@@ -59,9 +61,6 @@ def scan(project: str) -> None:
     click.echo(f"\nRun folder: {runs.runs_dir(project) / run_id}")
 
 
-if __name__ == "__main__":
-    main()
-
 
 @main.command("a2a-attack")
 @click.option("--host", default="0.0.0.0", show_default=True)
@@ -78,3 +77,6 @@ def a2a_review(host: str) -> None:
     from agentguard.a2a.servers import serve_forever
     serve_forever("review", host)
 
+
+if __name__ == "__main__":
+    main()

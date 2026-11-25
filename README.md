@@ -82,6 +82,33 @@ run them separately with `agentguard a2a-attack` and `agentguard a2a-review`, an
 `AGENTGUARD_A2A_ATTACK_URL` / `AGENTGUARD_A2A_REVIEW_URL` at them. `AGENTGUARD_A2A=0` runs the same agents
 in-process without A2A.
 
+## Deploy on AWS
+
+One EC2 instance (`m7i-flex.large`, Mumbai by default) runs the Docker image: the dashboard, the Search agent and
+both A2A services (ADK attack, CrewAI review). The demo target, VulnLab, sits next to AgentGuard and is mounted
+into the container.
+
+```
+your laptop ── deploy/aws/deploy.sh ──▶ S3 (release + run results, private, encrypted)
+                                       SSM Parameter Store (/agentguard/*, SecureString: keys from .env)
+                                       IAM role (read those keys, read/write that bucket, Session Manager)
+                                       EC2 ── docker: agentguard up --host 0.0.0.0 ──▶ :8765, your IP only
+```
+
+```bash
+aws login                         # or aws sso login
+deploy/aws/deploy.sh up           # first time: creates everything, prints the dashboard URL
+deploy/aws/deploy.sh update       # ship new code
+deploy/aws/deploy.sh keys         # .env changed: copy it to SSM and restart
+deploy/aws/deploy.sh allow-ip     # your IP changed (the dashboard has no login, so it is IP-restricted)
+deploy/aws/deploy.sh stop|start   # stop when not in use: only the disk is billed
+deploy/aws/deploy.sh status|logs
+```
+
+There is no SSH port; for a shell use `aws ssm start-session --target <instance id>`. Run results are copied to
+`s3://agentguard-<account>-<region>/runs/` every 5 minutes. The image also runs anywhere else:
+`docker build -t agentguard . && docker run --env-file .env -p 8765:8765 -v "$PWD/../your-project:/project" agentguard`.
+
 ## Code map
 
 | File | What it does |
@@ -100,6 +127,7 @@ in-process without A2A.
 | `agentguard/review/crew.py`, `review/report.py` | The review crew (Flow, guardrails, fallbacks); the final report |
 | `agentguard/costs.py`, `agentguard/evals.py`, `evals/` | Prices and cost; run scores and test sets with known answers |
 | `agentguard/observability.py` | LangFuse tracing (optional) |
+| `Dockerfile`, `deploy/aws/` | The image; the AWS deploy (S3, SSM, IAM, EC2) |
 | `agentguard/schemas.py` | Pydantic models: `ScanReport`, `SearchResult`, `AttackReport`, `LeadPlan`, `TriageResult`, `ReportDraft`, `QAReview`, `FinalReport` |
 | `agentguard/runs.py`, `server.py`, `static/index.html` | Runs, the API and live event stream, the dashboard |
 
