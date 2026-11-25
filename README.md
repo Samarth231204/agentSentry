@@ -1,6 +1,6 @@
 # AgentGuard
 
-AgentGuard finds the parts of an AI agent that an attacker would target, and (in later steps) tests them.
+AgentGuard finds the parts of an AI agent that an attacker would target, then attacks them in a sandbox.
 
 ## Run it
 
@@ -11,41 +11,64 @@ cp AgentGuard/.env.example AgentGuard/.env   # then put your ANTHROPIC_API_KEY i
 ./AgentGuard/run                              # opens the dashboard at http://127.0.0.1:8765
 ```
 
-Click **Run Search agent**. To run in the terminal only, without the dashboard: `AGENTGUARD_CMD=scan ./AgentGuard/run`.
+Click **Run AgentGuard**. To run in the terminal only, without the dashboard: `AGENTGUARD_CMD=scan ./AgentGuard/run`.
 
 ## What happens in a run
 
 ```
-SearchFlow  (CrewAI Flow, checkpointed to SQLite after every step)
+AgentGuard flow  (CrewAI Flow, checkpointed to SQLite after every step)
   1. scan    agentguard-scan MCP server → scan_project      deterministic, reads code with ast
-  2. search  Search agent (CrewAI, ReAct)                   Thought → Action → Observation, repeated
+  2. search  Search agent (CrewAI, ReAct, Sonnet 5.5)       Thought → Action → Observation
                tools: search_code, read_code, list_files    our MCP server (agentguard-scan)
                       semgrep_search                        external MCP server (official semgrep-mcp)
-             output: SearchResult (Pydantic)                main LLM call, risky tools, safe tools, other LLM calls
-  3. save    search.json
+             guardrail: every file:line and entry point must exist, or the agent must fix its answer
+             output: SearchResult (Pydantic) → search.json  entry points, main LLM call, risky tools
+  3. attack  10 ADK attack agents (Haiku 5.5), one per attack type, one after another
+               each talks to a SANDBOX: a throwaway copy of the project in its own process, whose model
+               calls are redirected to AgentGuard's model and key and whose acting tools (pay, send,
+               grant, run, SQL) are intercepted in memory: recorded, faked, never really run
+               an ORACLE (plain code) confirms a hit from what really happened; the agent can only
+               say "suspected"
+             output: AttackReport (Pydantic) → attacks.json
 ```
 
-Each run is stored in `your-project/.agentguard/runs/<run-id>/`:
-- `run.json`
-- `scan.json`
-- `search.json`
-- `trace.jsonl`, with every thought, action, observation and MCP call
-- `checkpoints.db`, the CrewAI checkpoints
+Attack types: prompt injection, secret extraction, tool misuse, data exfiltration, privilege escalation,
+RAG poisoning, memory persistence, unsafe command execution, SQL injection, insecure output handling.
 
-A failed or stopped run can be resumed from its last checkpoint from the dashboard, and the steps already finished are not repeated.
+Each run lives in `your-project/.agentguard/runs/<run-id>/`:
+- `search.json`, the Search agent's result
+- `attacks.json`, the attack results
+- `trace.jsonl`, every thought, action, observation, probe, guardrail hit and MCP call
+- `checkpoints.db`, the CrewAI checkpoints
+- `adk_sessions.db`, the ADK attack agents' sessions (every event saved)
+- `sandbox/`, the project copy and its log
+
+A failed or stopped run resumes from its last checkpoint.
+
+**Monitoring and safety.**
+- CrewAI event listeners and ADK callbacks (before/after model, before/after tool, tool errors) send every step to the trace and the live dashboard.
+- Guardrails:
+  - The target's replies are fenced as untrusted, and checked for prompt injection.
+  - Our attackers' messages are checked for abusive language.
+  - Tool arguments and return types are validated.
+  - The Search agent's tool output is checked for injections planted in code.
+- LangFuse tracing switches on when `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are set.
 
 ## Code map
 
 | File | What it does |
 |---|---|
-| `agentguard/scanner.py` | Deterministic scan: LLM calls, tools (decorators, JSON schemas, `tools=[...]`, name-to-function tables across files), prompts, entry points |
-| `agentguard/mcp/scan_server.py` | Our MCP server (FastMCP, stdio): `scan_project`, `search_code`, `read_code`, `list_files`. Confined to the project; never reads `.env` or key files |
-| `agentguard/mcp/semgrep.py` | External MCP: official `semgrep-mcp`, started with `uvx` |
-| `agentguard/mcp/client.py` | One MCP client. Every call is traced |
-| `agentguard/agents/search.py` | Search agent, its tools, ReAct monitoring, `SearchFlow`, checkpoint and resume |
-| `agentguard/schemas.py` | Pydantic models: `ScanReport`, `SearchResult`, `TraceEvent` |
-| `agentguard/llm.py` | Model (`AGENTGUARD_MODEL`, default `anthropic/claude-sonnet-5-5`) and the CrewAI LLM object |
-| `agentguard/runs.py`, `server.py`, `static/index.html` | Run storage, the local API with live SSE trace, and the dashboard |
+| `agentguard/scanner.py` | Deterministic scan: LLM calls, tools, prompts, entry points |
+| `agentguard/mcp/scan_server.py` | Our MCP server: `scan_project`, `search_code`, `read_code`, `list_files` |
+| `agentguard/mcp/semgrep.py`, `mcp/client.py` | External Semgrep MCP server; one traced MCP client |
+| `agentguard/agents/search.py` | Search agent, its guardrail, ReAct monitoring, the run's Flow, resume |
+| `agentguard/sandbox/harness.py`, `runner.py` | Runs the project copy; model redirection; tool interception |
+| `agentguard/attack/categories.py`, `team.py` | The 10 attack types; the ADK attack agents, callbacks and checkpoints |
+| `agentguard/attack/oracles.py` | Code that confirms each attack type |
+| `agentguard/guardrails.py` | Injection and toxicity checks, untrusted fencing, type checks |
+| `agentguard/observability.py` | LangFuse tracing (optional) |
+| `agentguard/schemas.py` | Pydantic models: `ScanReport`, `SearchResult`, `AttackReport`, `TraceEvent` |
+| `agentguard/runs.py`, `server.py`, `static/index.html` | Runs, the API and live event stream, the dashboard |
 
 ## Requirements
 
@@ -53,4 +76,5 @@ A failed or stopped run can be resumed from its last checkpoint from the dashboa
 - An Anthropic API key
 - For Semgrep: [uv](https://docs.astral.sh/uv/) and `uv tool install semgrep`. Without them the agent uses `search_code` only.
 
-Only Python projects are supported for now.
+Only Python projects are supported for now. The project's agent must call its model through LiteLLM or the
+OpenAI SDK (so AgentGuard can give it its own key), or read a key from the environment.

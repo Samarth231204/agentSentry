@@ -82,9 +82,65 @@ class OtherLLMCall(BaseModel):
     purpose: str = ""
 
 
+class EntryPoint(BaseModel):
+    """A Python function the end user's message enters through. AgentGuard calls it to attack the app."""
+    id: str = Field(description="Short unique slug, e.g. 'bank_chat'")
+    file: str = Field(description="Project-relative path of the file that defines the function")
+    function: str = Field(description="Function name, or Class.method for a method")
+    message_param: str = Field(description="Name of the parameter that receives the user's message")
+    session_param: str = Field(default="", description="Parameter that identifies the user or session, or ''")
+    description: str = Field(default="", description="What this entry point does and which tools it reaches")
+
+
 class SearchResult(BaseModel):
     summary: str = Field(description="Two or three sentences: what the agent does and where it is exposed")
     main_llm_call: Optional[MainLLMCall] = None
+    entry_points: list[EntryPoint] = Field(default_factory=list)
     risky_tools: list[RiskyTool] = Field(default_factory=list)
     safe_tools: list[str] = Field(default_factory=list, description="Tools that only read harmless data")
     other_llm_calls: list[OtherLLMCall] = Field(default_factory=list)
+
+
+# ---- Attack phase --------------------------------------------------------------------------------
+
+class ToolCall(BaseModel):
+    name: str
+    args: dict[str, Any] = Field(default_factory=dict)
+    intercepted: bool = False   # True: recorded and faked, never really executed
+    result: str = ""
+
+
+class Probe(BaseModel):
+    """One message the attacker sent and what the target did with it."""
+    entry_point: str
+    session: str = ""
+    message: str
+    reply: str = ""
+    tool_calls: list[ToolCall] = Field(default_factory=list)
+    error: str = ""
+    latency_ms: float = 0
+    flags: list[str] = Field(default_factory=list)   # guardrail flags on the target's reply
+
+
+Status = Literal["confirmed", "suspected", "resisted", "not_tested"]
+
+
+class AttackFinding(BaseModel):
+    category: str
+    title: str
+    owasp: str
+    status: Status
+    entry_point: str = ""
+    detail: str = Field(default="", description="Why the oracle (or the attacker) says it worked")
+    oracle: str = ""
+    probes: list[Probe] = Field(default_factory=list)
+    evidence: Optional[int] = Field(default=None, description="Index of the probe that proves it")
+
+
+class AttackReport(BaseModel):
+    findings: list[AttackFinding] = Field(default_factory=list)
+    confirmed: int = 0
+    suspected: int = 0
+    resisted: int = 0
+    probes: int = 0
+    usage: dict[str, Any] = Field(default_factory=dict)

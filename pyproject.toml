@@ -13,6 +13,10 @@ dependencies = [
     "pyyaml>=6.0",
     "litellm>=1.95,<1.106",
     "mcp>=1.28,<2.0",
+    "google-adk>=1.20",            # attack agents
+    "sqlalchemy>=2.0",
+    "aiosqlite>=0.20",             # ADK session checkpoints in SQLite
+    "langfuse>=3.0,<4.0",          # optional tracing (on when LANGFUSE_* keys are set)
     # Pinned: checkpointing (crewai.state) and the LLM patch in llm.py are tested on this version.
     "crewai==1.15.22",
 ]

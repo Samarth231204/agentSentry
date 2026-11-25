@@ -14,7 +14,8 @@ load_env()
 # No usage data leaves this machine from CrewAI or LiteLLM.
 os.environ.setdefault("CREWAI_DISABLE_TELEMETRY", "true")
 os.environ.setdefault("CREWAI_TRACING_ENABLED", "false")
-os.environ.setdefault("OTEL_SDK_DISABLED", "true")
+if not (os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY")):
+    os.environ.setdefault("OTEL_SDK_DISABLED", "true")  # LangFuse v3 is built on OpenTelemetry
 
 DEFAULT_MODEL = "anthropic/claude-sonnet-5-5"
 

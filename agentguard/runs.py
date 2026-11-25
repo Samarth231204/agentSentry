@@ -73,13 +73,45 @@ def checkpoints(run_dir: Path) -> list[dict]:
     return [{"id": i, "created_at": c, "parent_id": p} for i, c, p in rows]
 
 
+def adk_sessions(run_dir: Path) -> list[dict]:
+    """The ADK attack agents' checkpoints: one session per category, every event persisted."""
+    import sqlite3
+
+    db = run_dir / "adk_sessions.db"
+    if not db.exists():
+        return []
+    try:
+        with sqlite3.connect(db) as conn:
+            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if "sessions" not in tables:
+                return []
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(sessions)")]
+            rows = conn.execute(f"SELECT * FROM sessions").fetchall()
+            out = []
+            for row in rows:
+                rec = dict(zip(cols, row))
+                n = conn.execute("SELECT COUNT(*) FROM events WHERE session_id = ?", (rec["id"],)).fetchone()[0] \
+                    if "events" in tables else 0
+                state = rec.get("state")
+                try:
+                    state = json.loads(state) if isinstance(state, (str, bytes)) else state
+                except ValueError:
+                    pass
+                if isinstance(state, dict):
+                    state = {k: v for k, v in state.items() if k not in ("targets",)}
+                out.append({"id": rec["id"], "events": n, "updated": str(rec.get("update_time", "")), "state": state})
+            return out
+    except sqlite3.Error:
+        return []
+
+
 def get_run(project: str | Path, run_id: str) -> Optional[dict]:
     d = runs_dir(project) / Path(run_id).name
     meta = read_json(d / "run.json")
     if meta is None:
         return None
     return {**meta, "scan": read_json(d / "scan.json"), "search": read_json(d / "search.json"),
-            "checkpoints": checkpoints(d)}
+            "attacks": read_json(d / "attacks.json"), "checkpoints": checkpoints(d), "adk": adk_sessions(d)}
 
 
 def mark_orphans(project: str | Path) -> None:
@@ -127,8 +159,15 @@ def start_run(project: str | Path, background: bool = True, resume: Optional[str
             if event.event_type == "step_started":
                 _write(run_dir, step=event.payload.get("step"))
             elif event.event_type == "usage":
-                _write(run_dir, usage=event.payload)
+                key = "usage_attack" if event.source == "attack" else "usage"
+                _write(run_dir, **{key: event.payload})
+            elif event.event_type == "step_done" and event.payload.get("step") == "attack":
+                _write(run_dir, attack={k: event.payload.get(k) for k in ("confirmed", "suspected", "resisted", "probes")})
         bus.subscribe(track)
+        from agentguard.observability import make_sink
+        tracer = make_sink(run_id, str(project))
+        if tracer:
+            bus.subscribe(tracer)
         try:
             from agentguard.agents.search import resume_search, run_search
             if resume:
@@ -145,6 +184,9 @@ def start_run(project: str | Path, background: bool = True, resume: Optional[str
             emit("flow", "error", error=f"{type(exc).__name__}: {exc}", trace=traceback.format_exc()[-2000:])
             _write(run_dir, status="failed", finished=time.time(), error=f"{type(exc).__name__}: {exc}")
         finally:
+            if tracer:
+                tracer.close()
+                bus.unsubscribe(tracer)
             bus.unsubscribe(sink)
             bus.unsubscribe(track)
             with _lock:
