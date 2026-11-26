@@ -28,7 +28,10 @@ printf 'AGENTGUARD_DEPLOYMENT=aws-ec2\n' >> env.tmp
 echo "==> (re)start container"
 docker rm -f agentguard >/dev/null 2>&1 || true
 docker run -d --name agentguard --restart unless-stopped --env-file env.tmp -p 8765:8765 \
-  -v "$HOME_DIR/vuln-agent-lab:/project" agentguard:latest >/dev/null
+  -v "$HOME_DIR/vuln-agent-lab:/work/vuln-agent-lab" agentguard:latest \
+  agentguard up --project /work/vuln-agent-lab --host 0.0.0.0 --port 8765 --no-browser >/dev/null
+# Mounted under its own name: AgentGuard recognises VulnLab by folder name (evals/vulnlab.json) and
+# then adds the Evaluation panel and the LangFuse dataset run.
 rm -f env.tmp
 
 echo "==> run results -> s3://$BUCKET/runs/ every 5 minutes"
