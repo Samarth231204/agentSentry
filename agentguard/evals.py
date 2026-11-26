@@ -56,7 +56,8 @@ def push_to_langfuse(spec: dict[str, Any], result: dict[str, Any], run_id: str) 
     """Creates the dataset (once) and records this run as a dataset run. Returns a status line."""
     from langfuse import Langfuse
 
-    lf = Langfuse()
+    from agentguard.observability import NOISY_SCOPES
+    lf = Langfuse(blocked_instrumentation_scopes=NOISY_SCOPES)  # same settings as the run's tracer
     try:
         lf.get_dataset(spec["dataset"])
     except Exception:  # noqa: BLE001  (not found)
